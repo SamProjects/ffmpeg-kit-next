@@ -6,11 +6,17 @@ if [[ ${FFMPEG_KIT_WEB_PTHREADS:-1} != "1" ]]; then
   return 1
 fi
 
-git checkout "${BASEDIR}"/src/"${LIB_NAME}"/source/CMakeLists.txt 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+# CLEAN PREVIOUS WORKAROUNDS
+git -C "${BASEDIR}"/src/"${LIB_NAME}" checkout source/CMakeLists.txt source/encoder/api.cpp 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 
 # WORKAROUND TO FIX static_assert ERRORS (same as the Android build); x265 defaults
 # to -std=gnu++98, which is appended after CMAKE_CXX_FLAGS and rejects static_assert
 ${SED_INLINE} 's/gnu++98/c++11/g' "${BASEDIR}"/src/"${LIB_NAME}"/source/CMakeLists.txt 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+
+# WORKAROUND TO DISABLE RUNTIME DLOPEN ON EMSCRIPTEN; x265's RUNTIME dlopen() FAILURES BREAK THE BUILD
+if ! web_linkage_is_static; then
+  (cd "${BASEDIR}" && patch -p0 -i "${BASEDIR}"/tools/patch/emcmake/x265/disable-runtime-dlopen-on-emscripten.patch) 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+fi
 
 mkdir -p "${BUILD_DIR}" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 cd "${BUILD_DIR}" 1>>"${BASEDIR}"/build.log 2>&1 || return 1

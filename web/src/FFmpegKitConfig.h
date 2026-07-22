@@ -38,14 +38,6 @@
 
 namespace ffmpegkit {
 
-enum Signal {
-    SignalInt = 2,
-    SignalQuit = 3,
-    SignalPipe = 13,
-    SignalTerm = 15,
-    SignalXcpu = 24
-};
-
 /**
  * <p>Configuration class of <code>FFmpegKit</code> library. Allows customizing
  * the global library options. Provides helper methods to support additional
@@ -126,22 +118,6 @@ class FFmpegKitConfig {
         const std::list<std::string> &fontDirectoryList,
         const std::map<std::string, std::string> &fontNameMapping);
 
-    /**
-     * <p>Creates a new named pipe to use in <code>FFmpeg</code> operations.
-     *
-     * <p>Please note that creator is responsible of closing created pipes.
-     *
-     * @return the full path of the named pipe
-     */
-    static std::shared_ptr<std::string> registerNewFFmpegPipe();
-
-    /**
-     * <p>Closes a previously created <code>FFmpeg</code> pipe.
-     *
-     * @param ffmpegPipePath full path of the FFmpeg pipe
-     */
-    static void closeFFmpegPipe(const std::string &ffmpegPipePath);
-
     static long registerFFmpegKitInputBuffer(const std::vector<uint8_t> &data);
 
     static long registerFFmpegKitInputBuffer(const uint8_t *data,
@@ -192,13 +168,6 @@ class FFmpegKitConfig {
     static std::string getVersion();
 
     /**
-     * <p>Returns whether FFmpegKit release is a Long Term Release or not.
-     *
-     * @return true/yes or false/no
-     */
-    static bool isLTSBuild();
-
-    /**
      * Returns FFmpegKit library build date.
      *
      * @return FFmpegKit library build date
@@ -214,14 +183,6 @@ class FFmpegKitConfig {
      */
     static int setEnvironmentVariable(const std::string &variableName,
                                       const std::string &variableValue);
-
-    /**
-     * <p>Registers a new ignored signal. Ignored signals are not handled by
-     * <code>FFmpegKit</code> library.
-     *
-     * @param signal signal to be ignored
-     */
-    static void ignoreSignal(const ffmpegkit::Signal signal);
 
     /**
      * <p>Synchronously executes the FFmpeg session provided.

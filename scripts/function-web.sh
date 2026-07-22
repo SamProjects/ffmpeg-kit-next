@@ -23,6 +23,26 @@ get_bundle_directory() {
   echo "bundle-web-wasm32"
 }
 
+get_web_linkage_mode() {
+  echo "${FFMPEG_KIT_WEB_LINKAGE:-dynamic}"
+}
+
+web_linkage_is_static() {
+  [[ $(get_web_linkage_mode) == "static" ]]
+}
+
+validate_web_linkage_mode() {
+  case "$(get_web_linkage_mode)" in
+  dynamic | static)
+    return 0
+    ;;
+  *)
+    echo -e "\n(*) Invalid web linkage mode '${FFMPEG_KIT_WEB_LINKAGE}'. Use 'dynamic' or 'static'.\n"
+    return 1
+    ;;
+  esac
+}
+
 get_target_cpu() {
   echo "wasm32"
 }
@@ -176,16 +196,16 @@ get_cxxflags() {
 
   case $1 in
   ffmpeg)
-    echo "$(get_web_simd_cflags) $(get_web_thread_cflags) -std=c++17 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
+    echo "$(get_arch_specific_cflags) -std=c++17 -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
   ffmpeg-kit)
-    echo "$(get_arch_specific_cflags) -std=c++17 -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE} ${USES_FFMPEG_KIT_PROTOCOLS}"
+    echo "$(get_arch_specific_cflags) -std=c++17 -fPIC -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE} ${USES_FFMPEG_KIT_PROTOCOLS}"
     ;;
   opencore-amr)
-    echo "$(get_arch_specific_cflags) -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE}"
+    echo "$(get_arch_specific_cflags) -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
   *)
-    echo "$(get_arch_specific_cflags) -std=c++17 -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE}"
+    echo "$(get_arch_specific_cflags) -std=c++17 -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
   esac
 }
@@ -650,27 +670,95 @@ Cflags: -I\${includedir}
 EOF
 }
 
-install_web_pkg_config_file() {
-  local FILE_NAME="$1"
-  local SOURCE="${INSTALL_PKG_CONFIG_DIR}/${FILE_NAME}"
-  local DESTINATION="${FFMPEG_KIT_BUNDLE_PKG_CONFIG_DIRECTORY}/${FILE_NAME}"
+get_web_bundle_library_search_flags() {
+  local lib_dir
 
-  rm -f "$DESTINATION" 2>>"${BASEDIR}"/build.log
-  cp "$SOURCE" "$DESTINATION" 2>>"${BASEDIR}"/build.log || return 1
+  for lib_dir in "${LIB_INSTALL_BASE}"/*/lib; do
+    if [[ -d "${lib_dir}" ]]; then
+      printf ' -L%s' "${lib_dir}"
+    fi
+  done
+}
 
-  ${SED_INLINE} "s|${LIB_INSTALL_BASE}/ffmpeg-kit|${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next|g" "$DESTINATION" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
-  ${SED_INLINE} "s|${LIB_INSTALL_BASE}/ffmpeg|${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next|g" "$DESTINATION" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+get_web_ffmpeg_external_ldflags() {
+  local FFMPEG_PKG_CONFIG_LIBS
+
+  FFMPEG_PKG_CONFIG_LIBS=$(
+    PKG_CONFIG_LIBDIR="$(get_web_pkg_config_libdir)" pkg-config --libs --static \
+      libavdevice libavfilter libswscale libavformat libavcodec libswresample libavutil \
+      2>>"${BASEDIR}"/build.log
+  ) || return 1
+
+  printf '%s\n' "${FFMPEG_PKG_CONFIG_LIBS}" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        t = $i
+        if (t ~ /^-l(avdevice|avfilter|swscale|avformat|avcodec|swresample|avutil)$/) continue
+        if (t == "-lstdc++" || t == "-lc++" || t == "-lpthread") continue
+        if (t ~ /^-sPTHREAD_POOL_SIZE=/ || t ~ /^-sUSE_ZLIB=/) continue
+        if (seen[t]++) continue
+        out = (out == "" ? t : out " " t)
+      }
+    }
+    END {
+      print out
+    }
+  '
 }
 
 create_web_main_module() {
   local FFMPEG_KIT_BUNDLE_LIB_DIRECTORY="$1"
+  local FFMPEG_EXTERNAL_LDFLAGS
+  local FFMPEG_EXTERNAL_LDFLAGS_ARRAY=()
+  local FFMPEG_LIBRARY_SEARCH_FLAGS
+  local EXPORTED_RUNTIME_METHODS
+  local LINK_INPUTS=()
+  local LINK_TRAILER=()
+  local MAIN_MODULE_FLAGS=()
+  local REQUIRED_LIBRARY
+  local WEB_LINKAGE_MODE
 
-  if [[ ! -f "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so" ]]; then
-    echo -e "INFO: Skipping libffmpegkit main module; libffmpegkit.so not found (ffmpeg-kit build skipped?)\n" 1>>"${BASEDIR}"/build.log 2>&1
+  WEB_LINKAGE_MODE="$(get_web_linkage_mode)"
+
+  if web_linkage_is_static; then
+    REQUIRED_LIBRARY="${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.a"
+    EXPORTED_RUNTIME_METHODS="ccall,cwrap,FS"
+    LINK_INPUTS=(
+      -Wl,--whole-archive
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.a"
+      -Wl,--no-whole-archive
+      -Wl,--start-group
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavdevice.a"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavcodec.a"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavfilter.a"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavformat.a"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavutil.a"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswresample.a"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswscale.a"
+    )
+    LINK_TRAILER=(-Wl,--end-group)
+  else
+    REQUIRED_LIBRARY="${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so"
+    EXPORTED_RUNTIME_METHODS="ccall,cwrap,FS,callMain"
+    MAIN_MODULE_FLAGS=(-sMAIN_MODULE=2)
+    LINK_INPUTS=(
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavdevice.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavcodec.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavfilter.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavformat.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavutil.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswresample.so"
+      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswscale.so"
+    )
+  fi
+
+  if [[ ! -f "${REQUIRED_LIBRARY}" ]]; then
+    echo -e "INFO: Skipping libffmpegkit ${WEB_LINKAGE_MODE} main module; ${REQUIRED_LIBRARY##*/} not found (ffmpeg-kit build skipped?)\n" 1>>"${BASEDIR}"/build.log 2>&1
     return
   fi
 
-  echo -e "INFO: Creating libffmpegkit.js and libffmpegkit.wasm main module\n" 1>>"${BASEDIR}"/build.log 2>&1
+  echo -e "INFO: Creating libffmpegkit.js and libffmpegkit.wasm ${WEB_LINKAGE_MODE} main module\n" 1>>"${BASEDIR}"/build.log 2>&1
 
   # Extra diagnostics for --debug builds (FFMPEG_KIT_DEBUG is set by enable_debug):
   # runtime assertions, a stack-overflow guard, and function names in stack traces.
@@ -679,13 +767,20 @@ create_web_main_module() {
     DEBUG_FLAGS="-sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 -gline-tables-only"
   fi
 
+  FFMPEG_EXTERNAL_LDFLAGS="$(get_web_ffmpeg_external_ldflags)" || return 1
+  if [[ -n ${FFMPEG_EXTERNAL_LDFLAGS} ]]; then
+    read -r -a FFMPEG_EXTERNAL_LDFLAGS_ARRAY <<<"${FFMPEG_EXTERNAL_LDFLAGS}"
+  fi
+  FFMPEG_LIBRARY_SEARCH_FLAGS="$(get_web_bundle_library_search_flags)"
+
   "${CXX}" \
-    $(get_ldflags ffmpeg-kit) \
+    $(get_ldflags ffmpeg-kit-wasm) \
     -fwasm-exceptions \
     -sWASM_LEGACY_EXCEPTIONS=0 \
     ${DEBUG_FLAGS} \
     -L"${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" \
-    -sMAIN_MODULE=2 \
+    ${FFMPEG_LIBRARY_SEARCH_FLAGS} \
+    "${MAIN_MODULE_FLAGS[@]}" \
     -sEXPORT_ES6=1 \
     -sMODULARIZE=1 \
     -sEXPORT_NAME=FFmpegKitModule \
@@ -695,70 +790,57 @@ create_web_main_module() {
     -sMAXIMUM_MEMORY=4GB \
     -sSTACK_SIZE=5MB \
     -sFORCE_FILESYSTEM=1 \
-    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,callMain \
+    -sEXPORTED_RUNTIME_METHODS="${EXPORTED_RUNTIME_METHODS}" \
     -sENVIRONMENT=web,worker \
     -sWASM_BIGINT=1 \
     -sUSE_ZLIB=1 \
     -lembind \
     -lworkerfs.js \
     -o "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.js" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavdevice.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavcodec.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavfilter.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavformat.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavutil.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswresample.so" \
-    "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswscale.so" \
+    "${LINK_INPUTS[@]}" \
+    "${FFMPEG_EXTERNAL_LDFLAGS_ARRAY[@]}" \
+    "${LINK_TRAILER[@]}" \
     1>>"${BASEDIR}"/build.log 2>&1 || return 1
 
-  echo -e "\nINFO: Created libffmpegkit.js and libffmpegkit.wasm main module\n" 1>>"${BASEDIR}"/build.log 2>&1
+  echo -e "\nINFO: Created libffmpegkit.js and libffmpegkit.wasm ${WEB_LINKAGE_MODE} main module\n" 1>>"${BASEDIR}"/build.log 2>&1
 
 }
 
 create_web_bundle() {
   set_toolchain_paths ""
 
-  local FFMPEG_KIT_BUNDLE_INCLUDE_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/include"
-  local FFMPEG_KIT_BUNDLE_LIB_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/lib"
-  FFMPEG_KIT_BUNDLE_PKG_CONFIG_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/pkgconfig"
+  local FFMPEG_KIT_BUNDLE_ROOT="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next"
+  local FFMPEG_KIT_BUNDLE_LIB_DIRECTORY="${FFMPEG_KIT_BUNDLE_ROOT}/lib"
+  local FFMPEG_KIT_BUNDLE_DIST_DIRECTORY="${FFMPEG_KIT_BUNDLE_ROOT}/dist"
 
-  initialize_folder "${FFMPEG_KIT_BUNDLE_INCLUDE_DIRECTORY}" || return 1
   initialize_folder "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" || return 1
-  initialize_folder "${FFMPEG_KIT_BUNDLE_PKG_CONFIG_DIRECTORY}" || return 1
+  initialize_folder "${FFMPEG_KIT_BUNDLE_DIST_DIRECTORY}" || return 1
 
-  if [[ -d "${LIB_INSTALL_BASE}/ffmpeg-kit/include" ]]; then
-    cp -r -P "${LIB_INSTALL_BASE}"/ffmpeg-kit/include/* "${FFMPEG_KIT_BUNDLE_INCLUDE_DIRECTORY}" 2>>"${BASEDIR}"/build.log
+  if web_linkage_is_static; then
+    local WEB_LIBRARY_SUFFIX="a"
+  else
+    local WEB_LIBRARY_SUFFIX="so"
   fi
-  cp -r -P "${LIB_INSTALL_BASE}"/ffmpeg/include/* "${FFMPEG_KIT_BUNDLE_INCLUDE_DIRECTORY}" 2>>"${BASEDIR}"/build.log
 
-  if [[ -f "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.so" ]]; then
-    cp -L "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.so" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so" 2>>"${BASEDIR}"/build.log || return 1
+  if [[ -f "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.${WEB_LIBRARY_SUFFIX}" ]]; then
+    cp -L "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.${WEB_LIBRARY_SUFFIX}" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.${WEB_LIBRARY_SUFFIX}" 2>>"${BASEDIR}"/build.log || return 1
   fi
   for library in libavdevice libavcodec libavfilter libavformat libavutil libswresample libswscale; do
-    cp -L "${LIB_INSTALL_BASE}/ffmpeg/lib/${library}.so" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/${library}.so" 2>>"${BASEDIR}"/build.log || return 1
+    cp -L "${LIB_INSTALL_BASE}/ffmpeg/lib/${library}.${WEB_LIBRARY_SUFFIX}" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/${library}.${WEB_LIBRARY_SUFFIX}" 2>>"${BASEDIR}"/build.log || return 1
   done
 
   create_web_main_module "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" || return 1
 
-  # Ship the hand-written JS binding layer (public native-named API + the internal
-  # FFmpegKitFactory conduit and worker host) plus its TypeScript declarations next to
-  # lib/. The worker imports ../lib/libffmpegkit.js, so binding/ and lib/ must remain
-  # siblings in the bundle. The npm package is rooted at the bundle's ffmpeg-kit-next/
-  # directory (package.json below), so binding/ and lib/ both fall under the package.
-  local FFMPEG_KIT_BUNDLE_ROOT="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next"
-  local FFMPEG_KIT_BUNDLE_BINDING_DIRECTORY="${FFMPEG_KIT_BUNDLE_ROOT}/binding"
-  initialize_folder "${FFMPEG_KIT_BUNDLE_BINDING_DIRECTORY}" || return 1
-  cp "${BASEDIR}"/web/binding/*.js "${BASEDIR}"/web/binding/*.d.ts "${FFMPEG_KIT_BUNDLE_BINDING_DIRECTORY}" 2>>"${BASEDIR}"/build.log || return 1
-  cp "${BASEDIR}"/web/package.json "${FFMPEG_KIT_BUNDLE_ROOT}/package.json" 2>>"${BASEDIR}"/build.log || return 1
-
-  for pc_file in libavformat.pc libswresample.pc libswscale.pc libavdevice.pc libavfilter.pc libavcodec.pc libavutil.pc; do
-    install_web_pkg_config_file "${pc_file}" || return 1
-  done
-
-  if [[ -f "${INSTALL_PKG_CONFIG_DIR}/ffmpeg-kit-next.pc" ]]; then
-    install_web_pkg_config_file "ffmpeg-kit-next.pc" || return 1
-  fi
+  # Ship the hand-written JS binding layer plus its TypeScript declarations next to
+  # lib/. The worker imports ../lib/libffmpegkit.js, so dist/ and lib/ must remain
+  # siblings in the bundle.
+  #
+  # index.js is a barrel that re-exports from js/src/, and FFmpegKitFactory resolves
+  # the worker as ../ffmpegkit.worker.js — so src/ must be copied as a subdirectory
+  # of dist/, not flattened into it.
+  cp "${BASEDIR}"/web/js/*.js "${BASEDIR}"/web/js/*.d.ts "${FFMPEG_KIT_BUNDLE_DIST_DIRECTORY}" 2>>"${BASEDIR}"/build.log || return 1
+  cp -R "${BASEDIR}"/web/js/src "${FFMPEG_KIT_BUNDLE_DIST_DIRECTORY}"/src 2>>"${BASEDIR}"/build.log || return 1
+  cp "${BASEDIR}"/web/package.dist.json "${FFMPEG_KIT_BUNDLE_ROOT}/package.json" 2>>"${BASEDIR}"/build.log || return 1
 
   if [[ ${GPL_ENABLED} == "yes" ]]; then
     cp "${BASEDIR}"/tools/license/LICENSE.GPLv3 "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}"/license.txt 1>>"${BASEDIR}"/build.log 2>&1 || return 1

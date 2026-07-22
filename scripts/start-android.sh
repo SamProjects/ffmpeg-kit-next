@@ -403,6 +403,7 @@ if [[ -n ${ANDROID_ARCHITECTURES} ]]; then
     echo -e -n "\nCreating Android archive under prebuilt: "
 
     # BUILD ANDROID ARCHIVE
+    export JAVA_TOOL_OPTIONS="''${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.language=en -Duser.country=US"
     rm -f "${BASEDIR}"/android/ffmpeg-kit-next-android-lib/build/outputs/aar/ffmpeg-kit-next-release.aar 1>>"${BASEDIR}"/build.log 2>&1
     ./gradlew ffmpeg-kit-next-android-lib:clean ffmpeg-kit-next-android-lib:assembleRelease ffmpeg-kit-next-android-lib:testReleaseUnitTest 1>>"${BASEDIR}"/build.log 2>&1
     if [ $? -ne 0 ]; then

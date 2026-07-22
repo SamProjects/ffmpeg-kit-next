@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2026 Taner Sener
+ * Copyright (c) 2026 Taner Sener
  *
  * This file is part of FFmpegKitNext.
  *
@@ -17,30 +17,18 @@
  * along with FFmpegKitNext. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef FFMPEG_KIT_PACKAGES_H
-#define FFMPEG_KIT_PACKAGES_H
-
-#include <iostream>
-#include <memory>
-#include <set>
-#include <string>
-
-namespace ffmpegkit {
+import {getFactory} from './FFmpegKitFactory.js';
 
 /**
- * <p>Helper class to extract binary package information.
+ * Detects the running architecture.
  */
-class Packages {
-  public:
-
+export class ArchDetect {
     /**
-     * Returns enabled external libraries by FFmpeg.
+     * Returns architecture name loaded.
      *
-     * @return enabled external libraries
+     * @returns {Promise<string>} architecture name loaded
      */
-    static std::shared_ptr<std::set<std::string>> getExternalLibraries();
-};
-
-} // namespace ffmpegkit
-
-#endif // FFMPEG_KIT_PACKAGES_H
+    static async getArch() {
+        return getFactory().getArch();
+    }
+}

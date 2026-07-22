@@ -24,3 +24,5 @@
 /install-sh
 /missing
 /*.wasm
+/node_modules/
+/package-lock.json

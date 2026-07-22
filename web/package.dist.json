@@ -3,27 +3,19 @@
   "version": "8.1.0",
   "description": "FFmpegKitNext bindings for the web (WebAssembly). Native-named FFmpegKit API over a web worker-hosted wasm module",
   "type": "module",
-  "main": "js/index.js",
-  "types": "js/index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./js/index.d.ts",
-      "default": "./js/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "js/",
+    "dist/",
     "lib/"
   ],
-  "scripts": {
-    "test": "node --test \"test/**/*.test.mjs\"",
-    "lint": "eslint ."
-  },
-  "devDependencies": {
-    "eslint": "^9.17.0",
-    "eslint-plugin-import": "^2.31.0"
-  },
   "keywords": [
     "ffmpeg",
     "ffprobe",

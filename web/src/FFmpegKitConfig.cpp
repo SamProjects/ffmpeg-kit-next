@@ -1782,49 +1782,6 @@ void ffmpegkit::FFmpegKitConfig::setFontDirectoryList(
     }
 }
 
-std::shared_ptr<std::string>
-ffmpegkit::FFmpegKitConfig::registerNewFFmpegPipe() {
-    const char *parentDirectory = std::getenv("HOME");
-    if (parentDirectory == NULL) {
-        parentDirectory = std::getenv("TMPDIR");
-        if (parentDirectory == NULL) {
-            parentDirectory = ".";
-        }
-    }
-
-    // PIPES ARE CREATED UNDER THE PIPES DIRECTORY
-    std::string cacheDir = std::string(parentDirectory) + "/.cache";
-    std::string ffmpegKitDir = cacheDir + "/ffmpegkit";
-    std::string pipesDir = ffmpegKitDir + "/pipes";
-
-    if (!fs_create_dir(cacheDir) || !fs_create_dir(ffmpegKitDir) ||
-        !fs_create_dir(pipesDir)) {
-        return nullptr;
-    }
-
-    std::shared_ptr<std::string> newFFmpegPipePath =
-        std::make_shared<std::string>(pipesDir + "/" +
-                                      FFmpegKitNamedPipePrefix +
-                                      std::to_string(pipeIndexGenerator++));
-
-    // FIRST CLOSE OLD PIPES WITH THE SAME NAME
-    ffmpegkit::FFmpegKitConfig::closeFFmpegPipe(newFFmpegPipePath->c_str());
-
-    int rc = mkfifo(newFFmpegPipePath->c_str(), S_IRWXU | S_IRWXG | S_IROTH);
-    if (rc == 0) {
-        return newFFmpegPipePath;
-    } else {
-        std::cout << "Failed to register new FFmpeg pipe " << newFFmpegPipePath
-                  << ". Operation failed with rc=" << rc << "." << std::endl;
-        return nullptr;
-    }
-}
-
-void ffmpegkit::FFmpegKitConfig::closeFFmpegPipe(
-    const std::string &ffmpegPipePath) {
-    std::remove(ffmpegPipePath.c_str());
-}
-
 long ffmpegkit::FFmpegKitConfig::registerFFmpegKitInputBuffer(
     const std::vector<uint8_t> &data) {
     return ffmpegkit::FFmpegKitConfig::registerFFmpegKitInputBuffer(
@@ -2193,19 +2150,7 @@ std::string ffmpegkit::FFmpegKitConfig::getFFmpegVersion() {
 }
 
 std::string ffmpegkit::FFmpegKitConfig::getVersion() {
-    if (FFmpegKitConfig::isLTSBuild()) {
-        return std::string("").append(FFmpegKitVersion).append("-lts");
-    } else {
-        return FFmpegKitVersion;
-    }
-}
-
-bool ffmpegkit::FFmpegKitConfig::isLTSBuild() {
-#if defined(FFMPEG_KIT_LTS)
-    return true;
-#else
-    return false;
-#endif
+    return FFmpegKitVersion;
 }
 
 std::string ffmpegkit::FFmpegKitConfig::getBuildDate() {
@@ -2217,20 +2162,6 @@ std::string ffmpegkit::FFmpegKitConfig::getBuildDate() {
 int ffmpegkit::FFmpegKitConfig::setEnvironmentVariable(
     const std::string &variableName, const std::string &variableValue) {
     return setenv(variableName.c_str(), variableValue.c_str(), true);
-}
-
-void ffmpegkit::FFmpegKitConfig::ignoreSignal(const ffmpegkit::Signal signal) {
-    if (signal == ffmpegkit::SignalQuit) {
-        handleSIGQUIT = 0;
-    } else if (signal == ffmpegkit::SignalInt) {
-        handleSIGINT = 0;
-    } else if (signal == ffmpegkit::SignalTerm) {
-        handleSIGTERM = 0;
-    } else if (signal == ffmpegkit::SignalXcpu) {
-        handleSIGXCPU = 0;
-    } else if (signal == ffmpegkit::SignalPipe) {
-        handleSIGPIPE = 0;
-    }
 }
 
 void ffmpegkit::FFmpegKitConfig::ffmpegExecute(
@@ -2613,7 +2544,11 @@ ffmpegkit::FFmpegKitConfig::getLastSession() {
     std::unique_lock<std::recursive_mutex> lock(sessionMutex, std::defer_lock);
     lock.lock();
 
-    return sessionHistoryList.front();
+    if (sessionHistoryList.empty()) {
+        return nullptr;
+    }
+
+    return sessionHistoryList.back();
 }
 
 std::shared_ptr<ffmpegkit::Session>
