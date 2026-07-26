@@ -26,7 +26,7 @@ get_min_api_level_flag() {
   echo "-DFFMPEG_KIT_MIN_SDK=${API}"
 }
 
-enable_main_build() {
+set_default_min_platform_version() {
   export API=24
 }
 

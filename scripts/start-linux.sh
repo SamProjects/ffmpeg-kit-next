@@ -22,8 +22,7 @@ BUILD_FULL=""
 BUILD_TYPE_ID=""
 BUILD_VERSION=$(git describe --tags --always 2>>"${BASEDIR}"/build.log)
 
-# MAIN BUILDS ENABLED BY DEFAULT
-enable_main_build
+set_default_min_platform_version
 
 # PROCESS BUILD OPTIONS
 while [ ! $# -eq 0 ]; do

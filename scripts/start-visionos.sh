@@ -50,8 +50,7 @@ if [[ -z ${BUILD_VERSION} ]]; then
   exit 1
 fi
 
-# MAIN BUILDS ENABLED BY DEFAULT
-enable_visionos_main_build
+set_default_min_platform_version
 
 # PROCESS BUILD OPTIONS
 while [ ! $# -eq 0 ]; do
