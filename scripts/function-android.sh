@@ -351,15 +351,15 @@ get_cxxflags() {
   fi
 
   case $1 in
-  gnutls)
-    echo "${COMMON_FLAGS} -std=c++11 -fno-rtti ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
-    ;;
   ffmpeg)
     if [[ -z ${FFMPEG_KIT_DEBUG} ]]; then
       echo "${COMMON_FLAGS} -std=c++11 -fno-exceptions -fno-rtti ${LINK_TIME_OPTIMIZATION_FLAGS} -O2 -ffunction-sections -fdata-sections ${EXTRA_CXXFLAGS}"
     else
       echo "${COMMON_FLAGS} -std=c++11 -fno-exceptions -fno-rtti ${FFMPEG_KIT_DEBUG} ${EXTRA_CXXFLAGS}"
     fi
+    ;;
+  gnutls)
+    echo "${COMMON_FLAGS} -std=c++11 -fno-rtti ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
   opencore-amr)
     echo "${COMMON_FLAGS} ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"

@@ -188,6 +188,9 @@ get_cxxflags() {
   fi
 
   case $1 in
+  ffmpeg-kit)
+    echo "-std=c++11 -fno-exceptions -fno-rtti -fPIC ${COMMON_CFLAGS} ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
+    ;;
   gnutls)
     echo "-std=c++11 -fno-rtti ${COMMON_CFLAGS} ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;

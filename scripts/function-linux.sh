@@ -284,7 +284,7 @@ get_cxxflags() {
     fi
     ;;
   ffmpeg-kit)
-    echo "${COMMON_FLAGS} ${USES_FFMPEG_KIT_PROTOCOLS}"
+    echo "-fPIC ${COMMON_FLAGS} ${USES_FFMPEG_KIT_PROTOCOLS}"
     ;;
   libjxl)
     echo "-stdlib=libstdc++ -std=c++17 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE} $(get_arch_specific_cflags) -fcxx-exceptions -fPIC"

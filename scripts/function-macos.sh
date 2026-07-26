@@ -163,6 +163,9 @@ get_cxxflags() {
   local BITCODE_FLAGS=""
 
   case $1 in
+  ffmpeg-kit)
+    echo "-std=c++11 -fno-exceptions -fno-rtti -fPIC ${BITCODE_FLAGS} ${COMMON_CFLAGS} ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
+    ;;
   gnutls)
     echo "-std=c++11 -fno-rtti ${BITCODE_FLAGS} ${COMMON_CFLAGS} ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
