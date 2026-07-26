@@ -2181,19 +2181,11 @@ std::string ffmpegkit::FFmpegKitConfig::getFFmpegVersion() {
 }
 
 std::string ffmpegkit::FFmpegKitConfig::getVersion() {
-    if (FFmpegKitConfig::isLTSBuild()) {
-        return std::string("").append(FFmpegKitVersion).append("-lts");
-    } else {
-        return FFmpegKitVersion;
-    }
+    return FFmpegKitVersion;
 }
 
 bool ffmpegkit::FFmpegKitConfig::isLTSBuild() {
-#if defined(FFMPEG_KIT_LTS)
-    return true;
-#else
     return false;
-#endif
 }
 
 std::string ffmpegkit::FFmpegKitConfig::getBuildDate() {

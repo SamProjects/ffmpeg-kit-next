@@ -194,9 +194,11 @@ class FFmpegKitConfig {
     /**
      * <p>Returns whether FFmpegKit release is a Long Term Release or not.
      *
+     * @deprecated Deprecated. Linux builds do not have an LTS build concept.
      * @return true/yes or false/no
      */
-    static bool isLTSBuild();
+    static bool isLTSBuild()
+        __attribute__((deprecated("Deprecated. Linux builds do not have an LTS build concept.")));
 
     /**
      * Returns FFmpegKit library build date.

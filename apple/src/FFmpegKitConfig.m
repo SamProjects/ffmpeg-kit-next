@@ -2179,11 +2179,7 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
 }
 
 + (int)isLTSBuild {
-#if defined(FFMPEG_KIT_LTS)
-    return 1;
-#else
     return 0;
-#endif
 }
 
 + (NSString *)getBuildDate {

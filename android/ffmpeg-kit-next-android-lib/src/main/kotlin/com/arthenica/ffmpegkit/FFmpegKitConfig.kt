@@ -771,7 +771,7 @@ open class FFmpegKitConfig private constructor() {
          * determine the features supported by this version
          */
         @JvmStatic
-        @Deprecated("as of version 6.1.2, use the AbiDetect#getNativeMinSdk() method to determine the features supported by this version")
+        @Deprecated("Android builds do not have an LTS build concept.")
         fun isLTSBuild(): Boolean {
             return AbiDetect.isNativeLTSBuild()
         }
