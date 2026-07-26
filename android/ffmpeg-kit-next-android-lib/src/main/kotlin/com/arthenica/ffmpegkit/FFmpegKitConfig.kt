@@ -442,6 +442,7 @@ open class FFmpegKitConfig private constructor() {
             var validFontNameMappingCount = 0
 
             val tempConfigurationDirectory = File(cacheDir, "fontconfig")
+            val fontConfigurationCacheDirectory = File(tempConfigurationDirectory, "cache")
             if (!tempConfigurationDirectory.exists()) {
                 val tempFontConfDirectoryCreated = tempConfigurationDirectory.mkdirs()
                 android.util.Log.d(
@@ -449,6 +450,26 @@ open class FFmpegKitConfig private constructor() {
                     String.format(
                         "Created temporary font conf directory: %s.",
                         tempFontConfDirectoryCreated
+                    )
+                )
+            }
+            if (!fontConfigurationCacheDirectory.isDirectory) {
+                val tempFontCacheDirectoryCreated = fontConfigurationCacheDirectory.mkdirs()
+                if (!tempFontCacheDirectoryCreated && !fontConfigurationCacheDirectory.isDirectory) {
+                    android.util.Log.e(
+                        TAG,
+                        String.format(
+                            "Failed to set font directory. Error received while creating temp cache directory: %s.",
+                            fontConfigurationCacheDirectory.absolutePath
+                        )
+                    )
+                    return
+                }
+                android.util.Log.d(
+                    TAG,
+                    String.format(
+                        "Created temporary font cache directory: %s.",
+                        tempFontCacheDirectoryCreated
                     )
                 )
             }
@@ -467,37 +488,36 @@ open class FFmpegKitConfig private constructor() {
 
             /* PROCESS MAPPINGS FIRST */
             val fontNameMappingBlock = buildString {
-            if (fontNameMapping != null && fontNameMapping.isNotEmpty()) {
-                fontNameMapping.entries
-                for (mapping in fontNameMapping.entries) {
-                    val fontName = mapping.key
-                    val mappedFontName = mapping.value
+                if (fontNameMapping != null && fontNameMapping.isNotEmpty()) {
+                    for (mapping in fontNameMapping.entries) {
+                        val fontName = mapping.key
+                        val mappedFontName = mapping.value
 
-                    if (!fontName.isNullOrBlank() && !mappedFontName.isNullOrBlank()) {
-                        append("    <match target=\"pattern\">\n")
-                        append("        <test qual=\"any\" name=\"family\">\n")
-                        append(
-                            String.format(
-                                "            <string>%s</string>\n",
-                                fontName
+                        if (!fontName.isNullOrBlank() && !mappedFontName.isNullOrBlank()) {
+                            append("    <match target=\"pattern\">\n")
+                            append("        <test qual=\"any\" name=\"family\">\n")
+                            append(
+                                String.format(
+                                    "            <string>%s</string>\n",
+                                    fontName
+                                )
                             )
-                        )
-                        append("        </test>\n")
-                        append("        <edit name=\"family\" mode=\"assign\" binding=\"same\">\n")
-                        append(
-                            String.format(
-                                "            <string>%s</string>\n",
-                                mappedFontName
+                            append("        </test>\n")
+                            append("        <edit name=\"family\" mode=\"assign\" binding=\"same\">\n")
+                            append(
+                                String.format(
+                                    "            <string>%s</string>\n",
+                                    mappedFontName
+                                )
                             )
-                        )
-                        append("        </edit>\n")
-                        append("    </match>\n")
+                            append("        </edit>\n")
+                            append("    </match>\n")
 
-                        validFontNameMappingCount++
+                            validFontNameMappingCount++
+                        }
                     }
                 }
             }
-                }
 
             val fontConfigBuilder = buildString {
                 append("<?xml version=\"1.0\"?>\n")
@@ -509,6 +529,9 @@ open class FFmpegKitConfig private constructor() {
                     append(fontDirectoryPath)
                     append("</dir>\n")
                 }
+                append("    <cachedir>")
+                append(fontConfigurationCacheDirectory.absolutePath)
+                append("</cachedir>\n")
                 append(fontNameMappingBlock)
                 append("</fontconfig>\n")
             }

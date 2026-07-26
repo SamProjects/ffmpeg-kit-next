@@ -1687,9 +1687,11 @@ void ffmpegkit::FFmpegKitConfig::setFontDirectoryList(
     auto tempConfigurationDirectory = ffmpegKitDir + "/fontconfig";
     auto fontConfigurationFile =
         std::string(tempConfigurationDirectory) + "/fonts.conf";
+    auto fontConfigurationCacheDirectory = tempConfigurationDirectory + "/cache";
 
     if (!fs_create_dir(cacheDir) || !fs_create_dir(ffmpegKitDir) ||
-        !fs_create_dir(tempConfigurationDirectory)) {
+        !fs_create_dir(tempConfigurationDirectory) ||
+        !fs_create_dir(fontConfigurationCacheDirectory)) {
         return;
     }
     std::cout << "Created temporary font conf directory: TRUE." << std::endl;
@@ -1737,6 +1739,9 @@ void ffmpegkit::FFmpegKitConfig::setFontDirectoryList(
         fontConfiguration += fontDirectoryPath;
         fontConfiguration += "</dir>\n";
     }
+    fontConfiguration += "    <cachedir>";
+    fontConfiguration += fontConfigurationCacheDirectory;
+    fontConfiguration += "</cachedir>\n";
     fontConfiguration += fontNameMappingBlock;
     fontConfiguration += "</fontconfig>\n";
 
