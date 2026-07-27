@@ -812,6 +812,7 @@ create_web_bundle() {
   local FFMPEG_KIT_BUNDLE_ROOT="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next"
   local FFMPEG_KIT_BUNDLE_LIB_DIRECTORY="${FFMPEG_KIT_BUNDLE_ROOT}/lib"
   local FFMPEG_KIT_BUNDLE_DIST_DIRECTORY="${FFMPEG_KIT_BUNDLE_ROOT}/dist"
+  local FFMPEG_KIT_BUNDLE_LICENSES_DIRECTORY="${FFMPEG_KIT_BUNDLE_ROOT}/licenses"
 
   initialize_folder "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" || return 1
   initialize_folder "${FFMPEG_KIT_BUNDLE_DIST_DIRECTORY}" || return 1
@@ -842,11 +843,36 @@ create_web_bundle() {
   cp -R "${BASEDIR}"/web/js/src "${FFMPEG_KIT_BUNDLE_DIST_DIRECTORY}"/src 2>>"${BASEDIR}"/build.log || return 1
   cp "${BASEDIR}"/web/package.dist.json "${FFMPEG_KIT_BUNDLE_ROOT}/package.json" 2>>"${BASEDIR}"/build.log || return 1
 
+  # COPY THE FFMPEG-KIT LICENSE TO THE BUNDLE ROOT. Uppercase and extensionless
+  # so npm/unpkg/GitHub auto-detect it, and kept out of lib/ where the binaries live.
   if [[ ${GPL_ENABLED} == "yes" ]]; then
-    cp "${BASEDIR}"/tools/license/LICENSE.GPLv3 "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}"/license.txt 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+    cp "${BASEDIR}"/tools/license/LICENSE.GPLv3 "${FFMPEG_KIT_BUNDLE_ROOT}"/LICENSE 1>>"${BASEDIR}"/build.log 2>&1 || return 1
   else
-    cp "${BASEDIR}"/LICENSE "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}"/license.txt 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+    cp "${BASEDIR}"/LICENSE "${FFMPEG_KIT_BUNDLE_ROOT}"/LICENSE 1>>"${BASEDIR}"/build.log 2>&1 || return 1
   fi
 
-  cp "${BASEDIR}"/tools/source/SOURCE "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}"/source.txt 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+  # COPY EXTERNAL LIBRARY LICENSES INTO licenses/ AS LICENSE.<LIB> (matches the Apple bundle)
+  initialize_folder "${FFMPEG_KIT_BUNDLE_LICENSES_DIRECTORY}" || return 1
+  for library in $(get_common_library_indexes); do
+    if [[ ${ENABLED_LIBRARIES[$library]} -eq 1 ]]; then
+      local ENABLED_LIBRARY_NAME="$(get_library_name ${library})"
+      local ENABLED_LIBRARY_NAME_UPPERCASE=$(echo "${ENABLED_LIBRARY_NAME}" | tr '[a-z]' '[A-Z]')
+
+      RC=$(copy_external_library_license "${library}" "${FFMPEG_KIT_BUNDLE_LICENSES_DIRECTORY}"/LICENSE.${ENABLED_LIBRARY_NAME_UPPERCASE})
+
+      [[ ${RC} -ne 0 ]] && return 1
+    fi
+  done
+
+  # COPY CUSTOM LIBRARY LICENSES INTO licenses/
+  for custom_library_index in "${CUSTOM_LIBRARIES[@]}"; do
+    library_name="CUSTOM_LIBRARY_${custom_library_index}_NAME"
+    library_name_uppercase=$(echo "${!library_name}" | tr '[a-z]' '[A-Z]')
+    relative_license_path="CUSTOM_LIBRARY_${custom_library_index}_LICENSE_FILE"
+
+    cp "${BASEDIR}/src/${!library_name}/${!relative_license_path}" "${FFMPEG_KIT_BUNDLE_LICENSES_DIRECTORY}/LICENSE.${library_name_uppercase}" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+  done
+
+  # COPY THE SOURCE MANIFEST TO THE BUNDLE ROOT
+  cp "${BASEDIR}"/tools/source/SOURCE "${FFMPEG_KIT_BUNDLE_ROOT}"/SOURCE 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 }

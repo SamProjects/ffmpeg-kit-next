@@ -75,10 +75,12 @@ create_linux_bundle() {
   local FFMPEG_KIT_BUNDLE_INCLUDE_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/include"
   local FFMPEG_KIT_BUNDLE_LIB_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/lib"
   local FFMPEG_KIT_BUNDLE_PKG_CONFIG_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/pkgconfig"
+  local FFMPEG_KIT_BUNDLE_LICENSE_DIRECTORY="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/licenses"
 
   initialize_folder "${FFMPEG_KIT_BUNDLE_INCLUDE_DIRECTORY}"
   initialize_folder "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}"
   initialize_folder "${FFMPEG_KIT_BUNDLE_PKG_CONFIG_DIRECTORY}"
+  initialize_folder "${FFMPEG_KIT_BUNDLE_LICENSE_DIRECTORY}"
 
   # COPY HEADERS
   cp -r -P "${LIB_INSTALL_BASE}"/ffmpeg-kit/include/* "${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/include" 2>>"${BASEDIR}"/build.log
@@ -98,7 +100,7 @@ create_linux_bundle() {
   install_pkg_config_file "ffmpeg-kit-next.pc"
 
   # COPY EXTERNAL LIBRARY LICENSES
-  LICENSE_BASEDIR="${BASEDIR}/prebuilt/$(get_bundle_directory)/ffmpeg-kit-next/lib"
+  LICENSE_BASEDIR="${FFMPEG_KIT_BUNDLE_LICENSE_DIRECTORY}"
   rm -f "${LICENSE_BASEDIR}"/*.txt 1>>"${BASEDIR}"/build.log 2>&1 || exit 1
   for library in $(get_common_library_indexes); do
     if [[ ${ENABLED_LIBRARIES[$library]} -eq 1 ]]; then
