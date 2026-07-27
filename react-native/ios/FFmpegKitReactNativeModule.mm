@@ -979,7 +979,7 @@ RCT_EXPORT_METHOD(uninit:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejec
     SEL selector = NSSelectorFromString(@"addSessionDeleteListener:");
     if ([FFmpegKitConfig respondsToSelector:selector]) {
         void (*registerListener)(id, SEL, id) = (void (*)(id, SEL, id))[FFmpegKitConfig methodForSelector:selector];
-        registerListener(FFmpegKitConfig, selector, self);
+        registerListener([FFmpegKitConfig class], selector, self);
     }
 }
 
@@ -987,7 +987,7 @@ RCT_EXPORT_METHOD(uninit:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejec
     SEL selector = NSSelectorFromString(@"removeSessionDeleteListener:");
     if ([FFmpegKitConfig respondsToSelector:selector]) {
         void (*unregisterListener)(id, SEL, id) = (void (*)(id, SEL, id))[FFmpegKitConfig methodForSelector:selector];
-        unregisterListener(FFmpegKitConfig, selector, self);
+        unregisterListener([FFmpegKitConfig class], selector, self);
     }
 }
 
