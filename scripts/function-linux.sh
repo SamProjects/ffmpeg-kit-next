@@ -36,7 +36,7 @@ get_linux_pkg_config_libdir() {
   echo "${PKG_CONFIG_LIBDIR_VALUE}"
 }
 
-set_default_min_platform_version() {
+set_default_min_linux_platform_version() {
   local _TMP
 }
 

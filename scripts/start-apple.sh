@@ -147,10 +147,10 @@ DETECTED_IOS_SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version 2>>"${BASEDI
 DETECTED_TVOS_SDK_VERSION="$(xcrun --sdk appletvos --show-sdk-version 2>>"${BASEDIR}"/build.log)"
 DETECTED_MACOS_SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version 2>>"${BASEDIR}"/build.log)"
 DETECTED_VISIONOS_SDK_VERSION="$(xcrun --sdk xros --show-sdk-version 2>>"${BASEDIR}"/build.log)"
-set_default_min_platform_version
-set_default_min_platform_version
-set_default_min_platform_version
-set_default_min_platform_version
+set_default_min_ios_platform_version
+set_default_min_macos_platform_version
+set_default_min_tvos_platform_version
+set_default_min_visionos_platform_version
 XCODE_PATH=$(xcode-select -p 2>>"${BASEDIR}"/build.log)
 echo -e "INFO: Build options: $*\n" 1>>"${BASEDIR}"/build.log 2>&1
 

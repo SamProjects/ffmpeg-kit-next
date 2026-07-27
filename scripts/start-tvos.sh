@@ -50,7 +50,7 @@ if [[ -z ${BUILD_VERSION} ]]; then
   exit 1
 fi
 
-set_default_min_platform_version
+set_default_min_tvos_platform_version
 
 # PROCESS BUILD OPTIONS
 while [ ! $# -eq 0 ]; do

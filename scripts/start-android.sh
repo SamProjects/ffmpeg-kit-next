@@ -23,7 +23,7 @@ disabled_libraries=()
 # SET DEFAULT SETTINGS
 enable_default_android_architectures
 enable_default_android_libraries
-set_default_min_platform_version
+set_default_min_android_platform_version
 
 # DETECT ANDROID NDK VERSION
 export DETECTED_NDK_VERSION=$(grep -E "^Pkg\.Revision[[:space:]]*=" "${ANDROID_NDK_ROOT}"/source.properties | head -1 | sed 's/^.*=[[:space:]]*//')
