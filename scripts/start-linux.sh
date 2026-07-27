@@ -117,6 +117,11 @@ while [ ! $# -eq 0 ]; do
 
     export API=${API_LEVEL}
     ;;
+  --package-name=*)
+    PACKAGE_NAME="${1#--package-name=}"
+
+    export FFMPEG_KIT_PACKAGE_NAME="${PACKAGE_NAME}"
+    ;;
   --extra-cflags=*)
     EXTRA_CFLAGS="${1#--extra-cflags=}"
     export EXTRA_CFLAGS="${EXTRA_CFLAGS}"

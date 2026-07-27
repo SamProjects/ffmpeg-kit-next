@@ -138,7 +138,7 @@ get_app_specific_cflags() {
     echo "-Wno-unused-function"
     ;;
   ffmpeg-kit)
-    echo "-Wno-unused-function -Wno-pointer-sign -Wno-switch -Wno-deprecated-declarations"
+    echo "-Wno-unused-function -Wno-pointer-sign -Wno-switch -Wno-deprecated-declarations $(get_package_name_cflag)"
     ;;
   libvpx)
     # clock_gettime / CLOCK_MONOTONIC (used by vpx_ports/vpx_timer.h) are POSIX symbols
@@ -199,7 +199,7 @@ get_cxxflags() {
     echo "$(get_arch_specific_cflags) -std=c++17 -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
   ffmpeg-kit)
-    echo "$(get_arch_specific_cflags) -std=c++17 -fPIC -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE} ${USES_FFMPEG_KIT_PROTOCOLS}"
+    echo "$(get_arch_specific_cflags) -std=c++17 -fPIC -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE} $(get_package_name_cflag) ${USES_FFMPEG_KIT_PROTOCOLS}"
     ;;
   opencore-amr)
     echo "$(get_arch_specific_cflags) -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"

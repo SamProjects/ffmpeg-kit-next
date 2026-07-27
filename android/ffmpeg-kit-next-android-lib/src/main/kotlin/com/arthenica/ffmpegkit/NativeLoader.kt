@@ -108,6 +108,15 @@ open class NativeLoader {
         }
 
         @JvmStatic
+        internal fun loadPackageName(): String {
+            return if (isTestModeDisabled()) {
+                FFmpegKitConfig.getNativePackageName()
+            } else {
+                ""
+            }
+        }
+
+        @JvmStatic
         internal fun enableRedirection() {
             if (isTestModeDisabled()) {
                 FFmpegKitConfig.enableRedirection()

@@ -525,7 +525,9 @@ RCT_EXPORT_METHOD(getLogLevel:(RCTPromiseResolveBlock)resolve reject:(RCTPromise
 RCT_EXPORT_METHOD(printLoadConfirmation:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
     static dispatch_once_t loadedLoggedToken;
     dispatch_once(&loadedLoggedToken, ^{
-        NSLog(@"Loaded ffmpeg-kit-next-react-native-%@-%@-%@.", PLATFORM_NAME, [ArchDetect getArch], LIBRARY_VERSION);
+        NSString* packageName = [Packages getPackageName];
+        NSString* packageNamePart = [packageName length] > 0 ? [NSString stringWithFormat:@"%@-", packageName] : @"";
+        NSLog(@"Loaded ffmpeg-kit-next-react-native-%@%@-%@-%@.", packageNamePart, PLATFORM_NAME, [ArchDetect getArch], LIBRARY_VERSION);
     });
 
     resolve(nil);

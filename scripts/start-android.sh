@@ -136,6 +136,11 @@ while [ ! $# -eq 0 ]; do
   --no-ffmpeg-kit-protocols)
     export NO_FFMPEG_KIT_PROTOCOLS="1"
     ;;
+  --package-name=*)
+    PACKAGE_NAME="${1#--package-name=}"
+
+    export FFMPEG_KIT_PACKAGE_NAME="${PACKAGE_NAME}"
+    ;;
   --toolchain=*)
     ANDROID_TOOLCHAIN="${1#--toolchain=}"
     export ANDROID_TOOLCHAIN="${ANDROID_TOOLCHAIN}"

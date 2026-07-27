@@ -61,6 +61,8 @@ APP_ALLOW_MISSING_DEPS := true
 
 APP_PLATFORM := android-${API}
 
+FFMPEG_KIT_PACKAGE_NAME_CFLAG := $(get_package_name_cflag)
+
 APP_CFLAGS := -O3 -DANDROID ${MIN_API} ${BUILD_DATE} -Wall -Wno-deprecated-declarations -Wno-pointer-sign -Wno-switch -Wno-unused-result -Wno-unused-variable ${USES_FFMPEG_KIT_PROTOCOLS} ${FFMPEG_KIT_DEBUG} ${EXTRA_CFLAGS}
 
 APP_LDFLAGS := -Wl,--hash-style=both ${EXTRA_LDFLAGS}
@@ -279,6 +281,9 @@ get_size_optimization_cflags() {
 get_app_specific_cflags() {
   local APP_FLAGS=""
   case $1 in
+  ffmpeg-kit)
+    APP_FLAGS="-std=c99 -Wno-unused-function $(get_package_name_cflag)"
+    ;;
   ffmpeg)
     APP_FLAGS="-Wno-unused-function -DBIONIC_IOCTL_NO_SIGNEDNESS_OVERLOAD"
     ;;
@@ -351,6 +356,9 @@ get_cxxflags() {
   fi
 
   case $1 in
+  ffmpeg-kit)
+    echo "${COMMON_FLAGS} -std=c++11 -fno-exceptions -fno-rtti ${OPTIMIZATION_FLAGS} $(get_package_name_cflag) ${EXTRA_CXXFLAGS}"
+    ;;
   ffmpeg)
     if [[ -z ${FFMPEG_KIT_DEBUG} ]]; then
       echo "${COMMON_FLAGS} -std=c++11 -fno-exceptions -fno-rtti ${LINK_TIME_OPTIMIZATION_FLAGS} -O2 -ffunction-sections -fdata-sections ${EXTRA_CXXFLAGS}"

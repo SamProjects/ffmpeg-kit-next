@@ -221,7 +221,7 @@ get_app_specific_cflags() {
     APP_FLAGS="-Wno-unused-function"
     ;;
   ffmpeg-kit)
-    APP_FLAGS="-Wno-unused-function -Wno-pointer-sign -Wno-switch -Wno-deprecated-declarations"
+    APP_FLAGS="-Wno-unused-function -Wno-pointer-sign -Wno-switch -Wno-deprecated-declarations $(get_package_name_cflag)"
     ;;
   kvazaar | libsvtav1)
     APP_FLAGS="-std=gnu99 -Wno-unused-function"
@@ -284,7 +284,7 @@ get_cxxflags() {
     fi
     ;;
   ffmpeg-kit)
-    echo "-fPIC ${COMMON_FLAGS} ${USES_FFMPEG_KIT_PROTOCOLS}"
+    echo "-fPIC ${COMMON_FLAGS} $(get_package_name_cflag) ${USES_FFMPEG_KIT_PROTOCOLS}"
     ;;
   libjxl)
     echo "-stdlib=libstdc++ -std=c++17 ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS} ${BUILD_DATE} $(get_arch_specific_cflags) -fcxx-exceptions -fPIC"

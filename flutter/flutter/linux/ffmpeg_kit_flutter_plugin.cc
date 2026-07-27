@@ -889,7 +889,11 @@ static FlMethodResponse* handle_method_call(FfmpegKitNextFlutterPlugin* self,
     static gboolean logged = FALSE;
     if (!logged) {
       logged = TRUE;
-      g_message("Loaded ffmpeg-kit-next-flutter-%s-%s-%s.",
+      const std::string packageName = ffmpegkit::Packages::getPackageName();
+      const std::string packageNamePart =
+          packageName.empty() ? "" : packageName + "-";
+      g_message("Loaded ffmpeg-kit-next-flutter-%s%s-%s-%s.",
+                packageNamePart.c_str(),
                 FFMPEG_KIT_PLATFORM_NAME,
                 ffmpegkit::ArchDetect::getArch().c_str(),
                 FFMPEG_KIT_LIBRARY_VERSION);

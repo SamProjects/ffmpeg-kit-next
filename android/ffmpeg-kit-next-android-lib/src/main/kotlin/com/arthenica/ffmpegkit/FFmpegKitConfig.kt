@@ -150,10 +150,14 @@ open class FFmpegKitConfig private constructor() {
                 LogRedirectionStrategy.PRINT_LOGS_WHEN_NO_CALLBACKS_DEFINED
             safUrlsReusable = AtomicBoolean(false)
 
+            val packageName = NativeLoader.loadPackageName()
+            val packageNamePart = if (packageName.isNotEmpty()) "$packageName-" else ""
+
             android.util.Log.i(
                 TAG,
                 String.format(
-                    "Loaded ffmpeg-kit-next-%s-%s-api%s-%s.",
+                    "Loaded ffmpeg-kit-next-%s%s-%s-api%s-%s.",
+                    packageNamePart,
                     NativeLoader.loadAbi(),
                     NativeLoader.loadVersion(),
                     NativeLoader.loadMinSdk(),

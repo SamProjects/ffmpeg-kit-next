@@ -1328,7 +1328,9 @@ public class FFmpegKitFlutterPlugin implements FlutterPlugin, ActivityAware, Met
 
     protected void printLoadConfirmation(@NonNull final Result result) {
         if (loadedLogged.compareAndSet(false, true)) {
-            Log.d(LIBRARY_NAME, String.format("Loaded ffmpeg-kit-next-flutter-%s-%s-%s.", PLATFORM_NAME, AbiDetect.getAbi(), LIBRARY_VERSION));
+            final String packageName = Packages.getPackageName();
+            final String packageNamePart = packageName.isEmpty() ? "" : packageName + "-";
+            Log.d(LIBRARY_NAME, String.format("Loaded ffmpeg-kit-next-flutter-%s%s-%s-%s.", packageNamePart, PLATFORM_NAME, AbiDetect.getAbi(), LIBRARY_VERSION));
         }
 
         resultHandler.successAsync(result, null);

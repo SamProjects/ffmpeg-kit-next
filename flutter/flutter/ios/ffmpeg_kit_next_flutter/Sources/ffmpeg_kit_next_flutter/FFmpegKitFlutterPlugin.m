@@ -1040,7 +1040,9 @@ extern int const AbstractSessionDefaultTimeoutForAsynchronousMessagesInTransmit;
 - (void)printLoadConfirmation:(FlutterResult)result {
   static dispatch_once_t loadedLoggedToken;
   dispatch_once(&loadedLoggedToken, ^{
-    NSLog(@"Loaded ffmpeg-kit-next-flutter-%@-%@-%@.", PLATFORM_NAME, [ArchDetect getArch], LIBRARY_VERSION);
+    NSString* packageName = [Packages getPackageName];
+    NSString* packageNamePart = [packageName length] > 0 ? [NSString stringWithFormat:@"%@-", packageName] : @"";
+    NSLog(@"Loaded ffmpeg-kit-next-flutter-%@%@-%@-%@.", packageNamePart, PLATFORM_NAME, [ArchDetect getArch], LIBRARY_VERSION);
   });
 
   result(nil);

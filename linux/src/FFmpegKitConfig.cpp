@@ -1598,8 +1598,12 @@ void *ffmpegKitInitialize() {
 
         ffmpegkit::FFmpegKitConfig::enableRedirection();
 
+        const std::string packageName = ffmpegkit::Packages::getPackageName();
+        const std::string packageNamePart =
+            packageName.empty() ? "" : packageName + "-";
+
         std::cout << "Loaded ffmpeg-kit-next-"
-                  << ffmpegkit::ArchDetect::getArch() << "-"
+                  << packageNamePart << ffmpegkit::ArchDetect::getArch() << "-"
                   << ffmpegkit::FFmpegKitConfig::getVersion() << "-"
                   << ffmpegkit::FFmpegKitConfig::getBuildDate() << "."
                   << std::endl;
