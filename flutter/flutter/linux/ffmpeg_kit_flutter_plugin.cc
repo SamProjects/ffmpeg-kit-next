@@ -59,7 +59,7 @@
 #include <json/Value.h>
 
 #define FFMPEG_KIT_PLATFORM_NAME "linux"
-#define FFMPEG_KIT_LIBRARY_VERSION "8.1.0"
+#define FFMPEG_KIT_LIBRARY_VERSION "8.1.1"
 
 static const char* kMethodChannelName = "flutter.arthenica.com/ffmpeg_kit";
 static const char* kEventChannelName = "flutter.arthenica.com/ffmpeg_kit_event";
