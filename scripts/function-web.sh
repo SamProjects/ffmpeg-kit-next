@@ -707,7 +707,9 @@ get_web_ffmpeg_external_ldflags() {
 }
 
 create_web_main_module() {
-  local FFMPEG_KIT_BUNDLE_LIB_DIRECTORY="$1"
+  local FFMPEG_KIT_MAIN_MODULE_LIB_DIRECTORY="$1"
+  local FFMPEG_KIT_MAIN_MODULE_OUTPUT_DIRECTORY="${2:-$1}"
+  local FFMPEG_LIB_DIRECTORY="${LIB_INSTALL_BASE}/ffmpeg/lib"
   local FFMPEG_EXTERNAL_LDFLAGS
   local FFMPEG_EXTERNAL_LDFLAGS_ARRAY=()
   local FFMPEG_LIBRARY_SEARCH_FLAGS
@@ -721,35 +723,35 @@ create_web_main_module() {
   WEB_LINKAGE_MODE="$(get_web_linkage_mode)"
 
   if web_linkage_is_static; then
-    REQUIRED_LIBRARY="${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.a"
+    REQUIRED_LIBRARY="${FFMPEG_KIT_MAIN_MODULE_LIB_DIRECTORY}/libffmpegkit.a"
     EXPORTED_RUNTIME_METHODS="ccall,cwrap,FS"
     LINK_INPUTS=(
       -Wl,--whole-archive
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.a"
+      "${FFMPEG_KIT_MAIN_MODULE_LIB_DIRECTORY}/libffmpegkit.a"
       -Wl,--no-whole-archive
       -Wl,--start-group
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavdevice.a"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavcodec.a"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavfilter.a"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavformat.a"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavutil.a"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswresample.a"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswscale.a"
+      "${FFMPEG_LIB_DIRECTORY}/libavdevice.a"
+      "${FFMPEG_LIB_DIRECTORY}/libavcodec.a"
+      "${FFMPEG_LIB_DIRECTORY}/libavfilter.a"
+      "${FFMPEG_LIB_DIRECTORY}/libavformat.a"
+      "${FFMPEG_LIB_DIRECTORY}/libavutil.a"
+      "${FFMPEG_LIB_DIRECTORY}/libswresample.a"
+      "${FFMPEG_LIB_DIRECTORY}/libswscale.a"
     )
     LINK_TRAILER=(-Wl,--end-group)
   else
-    REQUIRED_LIBRARY="${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so"
+    REQUIRED_LIBRARY="${FFMPEG_KIT_MAIN_MODULE_LIB_DIRECTORY}/libffmpegkit.so"
     EXPORTED_RUNTIME_METHODS="ccall,cwrap,FS,callMain"
     MAIN_MODULE_FLAGS=(-sMAIN_MODULE=2)
     LINK_INPUTS=(
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavdevice.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavcodec.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavfilter.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavformat.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libavutil.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswresample.so"
-      "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libswscale.so"
+      "${FFMPEG_KIT_MAIN_MODULE_LIB_DIRECTORY}/libffmpegkit.so"
+      "${FFMPEG_LIB_DIRECTORY}/libavdevice.so"
+      "${FFMPEG_LIB_DIRECTORY}/libavcodec.so"
+      "${FFMPEG_LIB_DIRECTORY}/libavfilter.so"
+      "${FFMPEG_LIB_DIRECTORY}/libavformat.so"
+      "${FFMPEG_LIB_DIRECTORY}/libavutil.so"
+      "${FFMPEG_LIB_DIRECTORY}/libswresample.so"
+      "${FFMPEG_LIB_DIRECTORY}/libswscale.so"
     )
   fi
 
@@ -778,7 +780,8 @@ create_web_main_module() {
     -fwasm-exceptions \
     -sWASM_LEGACY_EXCEPTIONS=0 \
     ${DEBUG_FLAGS} \
-    -L"${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" \
+    -L"${FFMPEG_KIT_MAIN_MODULE_LIB_DIRECTORY}" \
+    -L"${FFMPEG_LIB_DIRECTORY}" \
     ${FFMPEG_LIBRARY_SEARCH_FLAGS} \
     "${MAIN_MODULE_FLAGS[@]}" \
     -sEXPORT_ES6=1 \
@@ -796,7 +799,7 @@ create_web_main_module() {
     -sUSE_ZLIB=1 \
     -lembind \
     -lworkerfs.js \
-    -o "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.js" \
+    -o "${FFMPEG_KIT_MAIN_MODULE_OUTPUT_DIRECTORY}/libffmpegkit.js" \
     "${LINK_INPUTS[@]}" \
     "${FFMPEG_EXTERNAL_LDFLAGS_ARRAY[@]}" \
     "${LINK_TRAILER[@]}" \
@@ -817,20 +820,16 @@ create_web_bundle() {
   initialize_folder "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" || return 1
   initialize_folder "${FFMPEG_KIT_BUNDLE_DIST_DIRECTORY}" || return 1
 
-  if web_linkage_is_static; then
-    local WEB_LIBRARY_SUFFIX="a"
-  else
-    local WEB_LIBRARY_SUFFIX="so"
+  if ! web_linkage_is_static; then
+    if [[ -f "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.so" ]]; then
+      cp -L "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.so" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.so" 2>>"${BASEDIR}"/build.log || return 1
+    fi
+    for library in libavdevice libavcodec libavfilter libavformat libavutil libswresample libswscale; do
+      cp -L "${LIB_INSTALL_BASE}/ffmpeg/lib/${library}.so" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/${library}.so" 2>>"${BASEDIR}"/build.log || return 1
+    done
   fi
 
-  if [[ -f "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.${WEB_LIBRARY_SUFFIX}" ]]; then
-    cp -L "${LIB_INSTALL_BASE}/ffmpeg-kit/lib/libffmpegkit.${WEB_LIBRARY_SUFFIX}" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/libffmpegkit.${WEB_LIBRARY_SUFFIX}" 2>>"${BASEDIR}"/build.log || return 1
-  fi
-  for library in libavdevice libavcodec libavfilter libavformat libavutil libswresample libswscale; do
-    cp -L "${LIB_INSTALL_BASE}/ffmpeg/lib/${library}.${WEB_LIBRARY_SUFFIX}" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}/${library}.${WEB_LIBRARY_SUFFIX}" 2>>"${BASEDIR}"/build.log || return 1
-  done
-
-  create_web_main_module "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" || return 1
+  create_web_main_module "${LIB_INSTALL_BASE}/ffmpeg-kit/lib" "${FFMPEG_KIT_BUNDLE_LIB_DIRECTORY}" || return 1
 
   # Ship the hand-written JS binding layer plus its TypeScript declarations next to
   # lib/. The worker imports ../lib/libffmpegkit.js, so dist/ and lib/ must remain
