@@ -54,18 +54,6 @@ class FFmpegKitConfigTest {
     }
 
     @Test
-    fun getPackageName() {
-        Assert.assertEquals("min", listToPackageName(listOf("")))
-        Assert.assertEquals("min-gpl", listToPackageName(listOf("xvidcore")))
-        Assert.assertEquals("full-gpl", listToPackageName(listOf("gnutls", "speex", "fribidi", "xvidcore")))
-        Assert.assertEquals("full", listToPackageName(listOf("fribidi", "speex")))
-        Assert.assertEquals("video", listToPackageName(listOf("fribidi")))
-        Assert.assertEquals("audio", listToPackageName(listOf("speex")))
-        Assert.assertEquals("https", listToPackageName(listOf("gnutls")))
-        Assert.assertEquals("https-gpl", listToPackageName(listOf("gnutls", "xvidcore")))
-    }
-
-    @Test
     fun extractExtensionFromSafDisplayName() {
         var extension = FFmpegKitConfig.extractExtensionFromSafDisplayName("video.mp4 (2)")
         Assert.assertEquals("mp4", extension)
@@ -182,6 +170,49 @@ class FFmpegKitConfigTest {
     }
 
     @Test
+    fun sessionDeleteListenersAreNotifiedForSingleBulkAndEvictedSessions() {
+        val originalSize = FFmpegKitConfig.getSessionHistorySize()
+        val deletedSessionIds = mutableListOf<Long>()
+        val listener = object : SessionDeleteListener {
+            override fun sessionDeleted(sessionId: Long) {
+                deletedSessionIds.add(sessionId)
+            }
+        }
+
+        try {
+            FFmpegKitConfig.clearSessions()
+            FFmpegKitConfig.setSessionHistorySize(10)
+            FFmpegKitConfig.addSessionDeleteListener(listener)
+
+            val singleSession = FFmpegSession.create(FFmpegSessionTest.TEST_ARGUMENTS)
+            FFmpegKitConfig.deleteSession(singleSession.getSessionId())
+            Assert.assertEquals(listOf(singleSession.getSessionId()), deletedSessionIds)
+            Assert.assertNull(FFmpegKitConfig.getSession(singleSession.getSessionId()))
+
+            deletedSessionIds.clear()
+            val firstBulkSession = FFmpegSession.create(FFmpegSessionTest.TEST_ARGUMENTS)
+            val secondBulkSession = FFmpegSession.create(FFmpegSessionTest.TEST_ARGUMENTS)
+            FFmpegKitConfig.clearSessions()
+            Assert.assertEquals(
+                listOf(firstBulkSession.getSessionId(), secondBulkSession.getSessionId()),
+                deletedSessionIds
+            )
+
+            deletedSessionIds.clear()
+            FFmpegKitConfig.setSessionHistorySize(1)
+            val evictedSession = FFmpegSession.create(FFmpegSessionTest.TEST_ARGUMENTS)
+            val retainedSession = FFmpegSession.create(FFmpegSessionTest.TEST_ARGUMENTS)
+            Assert.assertEquals(listOf(evictedSession.getSessionId()), deletedSessionIds)
+            Assert.assertNull(FFmpegKitConfig.getSession(evictedSession.getSessionId()))
+            Assert.assertSame(retainedSession, FFmpegKitConfig.getSession(retainedSession.getSessionId()))
+        } finally {
+            FFmpegKitConfig.removeSessionDeleteListener(listener)
+            FFmpegKitConfig.clearSessions()
+            FFmpegKitConfig.setSessionHistorySize(originalSize)
+        }
+    }
+
+    @Test
     fun globalCompleteCallbacksCanBeSetAndCleared() {
         val ffmpegCallback = FFmpegSessionCompleteCallback { }
         val ffprobeCallback = FFprobeSessionCompleteCallback { }
@@ -226,25 +257,6 @@ class FFmpegKitConfigTest {
     @Test
     fun unregisterSafProtocolUrl() {
         FFmpegKitConfig.unregisterSafProtocolUrl("ffkitsaf:1.mp4")
-    }
-
-    private fun listToPackageName(externalLibraryList: List<String>): String {
-        val speex = externalLibraryList.contains("speex")
-        val fribidi = externalLibraryList.contains("fribidi")
-        val gnutls = externalLibraryList.contains("gnutls")
-        val xvidcore = externalLibraryList.contains("xvidcore")
-
-        return if (speex && fribidi) {
-            if (xvidcore) "full-gpl" else "full"
-        } else if (speex) {
-            "audio"
-        } else if (fribidi) {
-            "video"
-        } else if (xvidcore) {
-            if (gnutls) "https-gpl" else "min-gpl"
-        } else {
-            if (gnutls) "https" else "min"
-        }
     }
 
     companion object {

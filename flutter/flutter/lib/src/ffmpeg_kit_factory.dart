@@ -99,7 +99,7 @@ class FFmpegKitFactory {
     }
   }
 
-  static String getVersion() => "8.1.0";
+  static String getVersion() => "8.1.1";
 
   static LogRedirectionStrategy? getLogRedirectionStrategy(int? sessionId) =>
       logRedirectionStrategyMap[sessionId];
@@ -109,6 +109,26 @@ class FFmpegKitFactory {
     if (sessionId != null && logRedirectionStrategy != null) {
       logRedirectionStrategyMap[sessionId] = logRedirectionStrategy;
     }
+  }
+
+  static void deleteSession(int? sessionId) {
+    if (sessionId != null) {
+      ffmpegSessionCompleteCallbackMap.remove(sessionId);
+      ffprobeSessionCompleteCallbackMap.remove(sessionId);
+      mediaInformationSessionCompleteCallbackMap.remove(sessionId);
+      logCallbackMap.remove(sessionId);
+      statisticsCallbackMap.remove(sessionId);
+      logRedirectionStrategyMap.remove(sessionId);
+    }
+  }
+
+  static void deleteSessions() {
+    ffmpegSessionCompleteCallbackMap.clear();
+    ffprobeSessionCompleteCallbackMap.clear();
+    mediaInformationSessionCompleteCallbackMap.clear();
+    logCallbackMap.clear();
+    statisticsCallbackMap.clear();
+    logRedirectionStrategyMap.clear();
   }
 
   static LogCallback? getLogCallback(int? sessionId) =>

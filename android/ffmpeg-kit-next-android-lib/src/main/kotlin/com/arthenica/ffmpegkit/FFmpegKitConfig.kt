@@ -33,6 +33,7 @@ import com.arthenica.smartexception.java.Exceptions
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.net.URI
 import java.net.URISyntaxException
 import java.nio.ByteBuffer
@@ -43,6 +44,7 @@ import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.LinkedList
 import java.util.StringTokenizer
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -58,7 +60,8 @@ open class FFmpegKitConfig private constructor() {
         val safId: Int,
         val uri: Uri,
         val openMode: String,
-        val contentResolver: ContentResolver
+        val contentResolver: ContentResolver,
+        val reusable: Boolean
     ) {
         var parcelFileDescriptor: ParcelFileDescriptor? = null
     }
@@ -90,6 +93,7 @@ open class FFmpegKitConfig private constructor() {
         private val sessionHistoryMap: MutableMap<Long, Session>
         private val sessionHistoryList: ArrayList<Session>
         private val sessionHistoryLock: Any
+        private val sessionDeleteListeners: CopyOnWriteArrayList<WeakReference<SessionDeleteListener>>
 
         private var asyncConcurrencyLimit: Int
         private var asyncExecutorService: ExecutorService
@@ -110,8 +114,6 @@ open class FFmpegKitConfig private constructor() {
 
             Exceptions.registerRootPackage("com.arthenica")
 
-            android.util.Log.i(TAG, "Loading ffmpeg-kit-next.")
-
             val nativeFFmpegTriedAndFailed = NativeLoader.loadFFmpeg()
 
             /* ALL FFMPEG-KIT LIBRARIES LOADED AT STARTUP */
@@ -131,13 +133,10 @@ open class FFmpegKitConfig private constructor() {
             asyncExecutorServiceLock = Any()
 
             sessionHistorySize = 10
-            sessionHistoryMap = object : LinkedHashMap<Long, Session>() {
-                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Session>): Boolean {
-                    return this.size > sessionHistorySize
-                }
-            }
+            sessionHistoryMap = LinkedHashMap()
             sessionHistoryList = ArrayList()
             sessionHistoryLock = Any()
+            sessionDeleteListeners = CopyOnWriteArrayList()
 
             globalLogCallback = null
             globalStatisticsCallback = null
@@ -151,10 +150,14 @@ open class FFmpegKitConfig private constructor() {
                 LogRedirectionStrategy.PRINT_LOGS_WHEN_NO_CALLBACKS_DEFINED
             safUrlsReusable = AtomicBoolean(false)
 
+            val packageName = NativeLoader.loadPackageName()
+            val packageNamePart = if (packageName.isNotEmpty()) "$packageName-" else ""
+
             android.util.Log.i(
                 TAG,
                 String.format(
-                    "Loaded ffmpeg-kit-next-%s-%s-api%s-%s.",
+                    "Loaded ffmpeg-kit-next-%s%s-%s-api%s-%s.",
+                    packageNamePart,
                     NativeLoader.loadAbi(),
                     NativeLoader.loadVersion(),
                     NativeLoader.loadMinSdk(),
@@ -443,6 +446,7 @@ open class FFmpegKitConfig private constructor() {
             var validFontNameMappingCount = 0
 
             val tempConfigurationDirectory = File(cacheDir, "fontconfig")
+            val fontConfigurationCacheDirectory = File(tempConfigurationDirectory, "cache")
             if (!tempConfigurationDirectory.exists()) {
                 val tempFontConfDirectoryCreated = tempConfigurationDirectory.mkdirs()
                 android.util.Log.d(
@@ -450,6 +454,26 @@ open class FFmpegKitConfig private constructor() {
                     String.format(
                         "Created temporary font conf directory: %s.",
                         tempFontConfDirectoryCreated
+                    )
+                )
+            }
+            if (!fontConfigurationCacheDirectory.isDirectory) {
+                val tempFontCacheDirectoryCreated = fontConfigurationCacheDirectory.mkdirs()
+                if (!tempFontCacheDirectoryCreated && !fontConfigurationCacheDirectory.isDirectory) {
+                    android.util.Log.e(
+                        TAG,
+                        String.format(
+                            "Failed to set font directory. Error received while creating temp cache directory: %s.",
+                            fontConfigurationCacheDirectory.absolutePath
+                        )
+                    )
+                    return
+                }
+                android.util.Log.d(
+                    TAG,
+                    String.format(
+                        "Created temporary font cache directory: %s.",
+                        tempFontCacheDirectoryCreated
                     )
                 )
             }
@@ -468,37 +492,36 @@ open class FFmpegKitConfig private constructor() {
 
             /* PROCESS MAPPINGS FIRST */
             val fontNameMappingBlock = buildString {
-            if (fontNameMapping != null && fontNameMapping.isNotEmpty()) {
-                fontNameMapping.entries
-                for (mapping in fontNameMapping.entries) {
-                    val fontName = mapping.key
-                    val mappedFontName = mapping.value
+                if (fontNameMapping != null && fontNameMapping.isNotEmpty()) {
+                    for (mapping in fontNameMapping.entries) {
+                        val fontName = mapping.key
+                        val mappedFontName = mapping.value
 
-                    if (!fontName.isNullOrBlank() && !mappedFontName.isNullOrBlank()) {
-                        append("    <match target=\"pattern\">\n")
-                        append("        <test qual=\"any\" name=\"family\">\n")
-                        append(
-                            String.format(
-                                "            <string>%s</string>\n",
-                                fontName
+                        if (!fontName.isNullOrBlank() && !mappedFontName.isNullOrBlank()) {
+                            append("    <match target=\"pattern\">\n")
+                            append("        <test qual=\"any\" name=\"family\">\n")
+                            append(
+                                String.format(
+                                    "            <string>%s</string>\n",
+                                    fontName
+                                )
                             )
-                        )
-                        append("        </test>\n")
-                        append("        <edit name=\"family\" mode=\"assign\" binding=\"same\">\n")
-                        append(
-                            String.format(
-                                "            <string>%s</string>\n",
-                                mappedFontName
+                            append("        </test>\n")
+                            append("        <edit name=\"family\" mode=\"assign\" binding=\"same\">\n")
+                            append(
+                                String.format(
+                                    "            <string>%s</string>\n",
+                                    mappedFontName
+                                )
                             )
-                        )
-                        append("        </edit>\n")
-                        append("    </match>\n")
+                            append("        </edit>\n")
+                            append("    </match>\n")
 
-                        validFontNameMappingCount++
+                            validFontNameMappingCount++
+                        }
                     }
                 }
             }
-                }
 
             val fontConfigBuilder = buildString {
                 append("<?xml version=\"1.0\"?>\n")
@@ -510,6 +533,9 @@ open class FFmpegKitConfig private constructor() {
                     append(fontDirectoryPath)
                     append("</dir>\n")
                 }
+                append("    <cachedir>")
+                append(fontConfigurationCacheDirectory.absolutePath)
+                append("</cachedir>\n")
                 append(fontNameMappingBlock)
                 append("</fontconfig>\n")
             }
@@ -749,7 +775,7 @@ open class FFmpegKitConfig private constructor() {
          * determine the features supported by this version
          */
         @JvmStatic
-        @Deprecated("as of version 6.1.2, use the AbiDetect#getNativeMinSdk() method to determine the features supported by this version")
+        @Deprecated("Android builds do not have an LTS build concept.")
         fun isLTSBuild(): Boolean {
             return AbiDetect.isNativeLTSBuild()
         }
@@ -901,26 +927,24 @@ open class FFmpegKitConfig private constructor() {
             mediaInformationSession.startRunning()
 
             try {
-                val returnCodeValue = nativeFFprobeExecute(
+                // ffprobe writes its JSON straight into a native buffer (not the
+                // logs) and returns the raw UTF-8 bytes, or null when it fails.
+                val output = nativeFFprobeGetMediaInformation(
                     mediaInformationSession.getSessionId(),
                     mediaInformationSession.getArguments()
                 )
-                val returnCode = ReturnCode(returnCodeValue)
+                val returnCode = ReturnCode(if (output != null) ReturnCode.SUCCESS else 1)
                 mediaInformationSession.complete(returnCode)
-                if (returnCode.isValueSuccess()) {
-                    val allLogs = mediaInformationSession.getAllLogs(waitTimeout)
-                    val ffprobeJsonOutput = StringBuilder()
-                    var i = 0
-                    val allLogsSize = allLogs.size
-                    while (i < allLogsSize) {
-                        val log = allLogs[i]
-                        if (log.level == Level.AV_LOG_STDERR) {
-                            ffprobeJsonOutput.append(log.message)
-                        }
-                        i++
-                    }
+
+                // NOTE: waitTimeout is retained for API compatibility but is no
+                // longer used here. ffprobe writes the JSON synchronously into
+                // the buffer above, so it is already complete and does not
+                // depend on async log delivery. Callers that read the session
+                // logs afterwards still get the wait, because getAllLogs applies
+                // the timeout itself.
+                if (returnCode.isValueSuccess() && output != null) {
                     val mediaInformation =
-                        MediaInformationJsonParser.fromWithError(ffprobeJsonOutput.toString())
+                        MediaInformationJsonParser.fromWithError(String(output, Charsets.UTF_8))
                     mediaInformationSession.setMediaInformation(mediaInformation)
                 }
             } catch (e: Exception) {
@@ -1237,6 +1261,11 @@ open class FFmpegKitConfig private constructor() {
          *
          * <p>Requires API Level 19+. On older API levels it returns an empty url.
          *
+         * <p>The generated url inherits the global reuse setting defined via
+         * {@link #setSafUrlsReusable}, captured at the time this method is called. Use the
+         * {@link #getSafParameter(Context, Uri, String, boolean)} overload to define the reuse
+         * behaviour for this url explicitly.
+         *
          * @param context  application context
          * @param uri      SAF uri
          * @param openMode file mode to use as defined in {@link ContentProvider#openFile ContentProvider.openFile}
@@ -1248,6 +1277,35 @@ open class FFmpegKitConfig private constructor() {
             @NonNull context: Context,
             @NonNull uri: Uri,
             @NonNull openMode: String
+        ): String {
+            return getSafParameter(context, uri, openMode, safUrlsReusable.get())
+        }
+
+        /**
+         * <p>Converts the given Structured Access Framework Uri into an
+         * SAF protocol url that can be used in FFmpeg and FFprobe commands.
+         *
+         * <p>Requires API Level 19+. On older API levels it returns an empty url.
+         *
+         * <p>The <code>reusable</code> value is stored per url when the url is created. It defines
+         * whether this specific url will be automatically unregistered when the file associated
+         * with it is closed. Because it is captured at creation time, changing the global reuse
+         * setting via {@link #setSafUrlsReusable} afterwards does not affect urls that were already
+         * created. Reusable urls must be unregistered manually via {@link #unregisterSafProtocolUrl}.
+         *
+         * @param context  application context
+         * @param uri      SAF uri
+         * @param openMode file mode to use as defined in {@link ContentProvider#openFile ContentProvider.openFile}
+         * @param reusable set to true to make this url reusable, false to unregister it automatically on close
+         * @return input/output url that can be passed to FFmpegKit or FFprobeKit
+         */
+        @JvmStatic
+        @NonNull
+        fun getSafParameter(
+            @NonNull context: Context,
+            @NonNull uri: Uri,
+            @NonNull openMode: String,
+            reusable: Boolean
         ): String {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
                 android.util.Log.i(
@@ -1282,7 +1340,7 @@ open class FFmpegKitConfig private constructor() {
             }
 
             val safId = uniqueIdGenerator.getAndIncrement()
-            safIdMap.put(safId, SAFProtocolUrl(safId, uri, openMode, context.contentResolver))
+            safIdMap.put(safId, SAFProtocolUrl(safId, uri, openMode, context.contentResolver, reusable))
 
             return "ffkitsaf:" + safId + "." + extractExtensionFromSafDisplayName(displayName)
         }
@@ -1309,6 +1367,23 @@ open class FFmpegKitConfig private constructor() {
          *
          * <p>Requires API Level &ge; 19. On older API levels it returns an empty url.
          *
+         * @param context  application context
+         * @param uri      SAF uri
+         * @param reusable set to true to make this url reusable, false to unregister it automatically on close
+         * @return input url that can be passed to FFmpegKit or FFprobeKit
+         */
+        @JvmStatic
+        @NonNull
+        fun getSafParameterForRead(@NonNull context: Context, @NonNull uri: Uri, reusable: Boolean): String {
+            return getSafParameter(context, uri, "r", reusable)
+        }
+
+        /**
+         * <p>Converts the given Structured Access Framework Uri (<code>"content:…"</code>) into an
+         * SAF protocol url that can be used in FFmpeg and FFprobe commands.
+         *
+         * <p>Requires API Level &ge; 19. On older API levels it returns an empty url.
+         *
          * @param context application context
          * @param uri     SAF uri
          * @return output url that can be passed to FFmpegKit or FFprobeKit
@@ -1317,6 +1392,23 @@ open class FFmpegKitConfig private constructor() {
         @NonNull
         fun getSafParameterForWrite(@NonNull context: Context, @NonNull uri: Uri): String {
             return getSafParameter(context, uri, "w")
+        }
+
+        /**
+         * <p>Converts the given Structured Access Framework Uri (<code>"content:…"</code>) into an
+         * SAF protocol url that can be used in FFmpeg and FFprobe commands.
+         *
+         * <p>Requires API Level &ge; 19. On older API levels it returns an empty url.
+         *
+         * @param context  application context
+         * @param uri      SAF uri
+         * @param reusable set to true to make this url reusable, false to unregister it automatically on close
+         * @return output url that can be passed to FFmpegKit or FFprobeKit
+         */
+        @JvmStatic
+        @NonNull
+        fun getSafParameterForWrite(@NonNull context: Context, @NonNull uri: Uri, reusable: Boolean): String {
+            return getSafParameter(context, uri, "w", reusable)
         }
 
         /**
@@ -1379,9 +1471,12 @@ open class FFmpegKitConfig private constructor() {
                     val parcelFileDescriptor = safProtocolUrl.parcelFileDescriptor
                     if (parcelFileDescriptor != null) {
                         safFileDescriptorMap.delete(fileDescriptor)
-                        parcelFileDescriptor.close()
-                        if (!safUrlsReusable.get()) {
-                            safIdMap.delete(safId)
+                        try {
+                            parcelFileDescriptor.close()
+                        } finally {
+                            if (!safProtocolUrl.reusable) {
+                                safIdMap.delete(safId)
+                            }
                         }
                         android.util.Log.d(
                             TAG,
@@ -1487,23 +1582,29 @@ open class FFmpegKitConfig private constructor() {
                  */
                 throw IllegalArgumentException("Session history size must not exceed the hard limit!")
             } else if (sessionHistorySize > 0) {
-                this.sessionHistorySize = sessionHistorySize
-                deleteExpiredSessions()
+                val deletedSessionIds = synchronized(sessionHistoryLock) {
+                    this.sessionHistorySize = sessionHistorySize
+                    deleteExpiredSessionsLocked()
+                }
+                notifySessionsDeleted(deletedSessionIds)
             }
         }
 
         /**
          * Deletes expired sessions.
          */
-        @JvmStatic
-        private fun deleteExpiredSessions() {
+        private fun deleteExpiredSessionsLocked(): List<Long> {
+            val deletedSessionIds = ArrayList<Long>()
             while (sessionHistoryList.size > sessionHistorySize) {
                 try {
                     val expiredSession: Session = sessionHistoryList.removeAt(0)
                     sessionHistoryMap.remove(expiredSession.getSessionId())
+                    deletedSessionIds.add(expiredSession.getSessionId())
                 } catch (_: IndexOutOfBoundsException) {
                 }
             }
+
+            return deletedSessionIds
         }
 
         /**
@@ -1513,7 +1614,7 @@ open class FFmpegKitConfig private constructor() {
          */
         @JvmStatic
         internal fun addSession(session: Session) {
-            synchronized(sessionHistoryLock) {
+            val deletedSessionIds = synchronized(sessionHistoryLock) {
 
                 /*
                  * ASYNC SESSIONS CALL THIS METHOD TWICE
@@ -1523,9 +1624,12 @@ open class FFmpegKitConfig private constructor() {
                 if (!sessionAlreadyAdded) {
                     sessionHistoryMap[session.getSessionId()] = session
                     sessionHistoryList.add(session)
-                    deleteExpiredSessions()
+                    deleteExpiredSessionsLocked()
+                } else {
+                    emptyList()
                 }
             }
+            notifySessionsDeleted(deletedSessionIds)
         }
 
         /**
@@ -1549,11 +1653,16 @@ open class FFmpegKitConfig private constructor() {
          */
         @JvmStatic
         fun deleteSession(sessionId: Long) {
-            synchronized(sessionHistoryLock) {
+            val deletedSessionId = synchronized(sessionHistoryLock) {
                 val removedSession = sessionHistoryMap.remove(sessionId)
                 if (removedSession != null) {
                     sessionHistoryList.remove(removedSession)
                 }
+                removedSession?.getSessionId()
+            }
+
+            if (deletedSessionId != null) {
+                notifySessionDeleted(deletedSessionId)
             }
         }
 
@@ -1614,9 +1723,62 @@ open class FFmpegKitConfig private constructor() {
          */
         @JvmStatic
         fun clearSessions() {
-            synchronized(sessionHistoryLock) {
+            val deletedSessionIds = synchronized(sessionHistoryLock) {
+                val sessionIds = sessionHistoryList.map { it.getSessionId() }
                 sessionHistoryList.clear()
                 sessionHistoryMap.clear()
+                sessionIds
+            }
+            notifySessionsDeleted(deletedSessionIds)
+        }
+
+        /**
+         * Adds a listener that is notified when sessions are deleted from session history.
+         */
+        @JvmStatic
+        fun addSessionDeleteListener(@NonNull listener: SessionDeleteListener) {
+            removeSessionDeleteListener(listener)
+            sessionDeleteListeners.add(WeakReference(listener))
+        }
+
+        /**
+         * Removes a session delete listener.
+         */
+        @JvmStatic
+        fun removeSessionDeleteListener(@NonNull listener: SessionDeleteListener) {
+            for (listenerReference in sessionDeleteListeners) {
+                val existingListener = listenerReference.get()
+                if (existingListener == null || existingListener === listener) {
+                    sessionDeleteListeners.remove(listenerReference)
+                }
+            }
+        }
+
+        private fun notifySessionsDeleted(sessionIds: List<Long>) {
+            for (sessionId in sessionIds) {
+                notifySessionDeleted(sessionId)
+            }
+        }
+
+        private fun notifySessionDeleted(sessionId: Long) {
+            for (listenerReference in sessionDeleteListeners) {
+                val listener = listenerReference.get()
+                if (listener == null) {
+                    sessionDeleteListeners.remove(listenerReference)
+                    continue
+                }
+
+                try {
+                    listener.sessionDeleted(sessionId)
+                } catch (e: Exception) {
+                    android.util.Log.e(
+                        TAG,
+                        String.format(
+                            "Exception thrown inside session delete listener.%s",
+                            Exceptions.getStackTraceString(e)
+                        )
+                    )
+                }
             }
         }
 
@@ -1737,16 +1899,23 @@ open class FFmpegKitConfig private constructor() {
         }
 
         /**
-         * Defines whether the generated SAF protocol urls will be reusable or not.
+         * Defines the default reuse behaviour applied to SAF protocol urls that are created
+         * without an explicit <code>reusable</code> value.
          *
          * <p>Note that SAF protocol urls are not reusable by default and are automatically
          * unregistered when the file associated with them is closed.
          *
-         * <p>If they are set to be reused using this method, automatic unregistration will be
-         * disabled. Therefore, it will be the developer's responsibility to unregister them via the
+         * <p>This setting is captured per url at the time the url is created. Changing it does not
+         * affect urls that were already created. To define the reuse behaviour of an individual url
+         * regardless of this setting, use the <code>reusable</code> overloads of
+         * {@link #getSafParameter}, {@link #getSafParameterForRead} and
+         * {@link #getSafParameterForWrite}.
+         *
+         * <p>When a url is reusable, automatic unregistration is disabled for that url. Therefore,
+         * it will be the developer's responsibility to unregister it via the
          * {@link #unregisterSafProtocolUrl} method.
          *
-         * @param safUrlsReusable set to true to enable the reuse of SAF protocol urls
+         * @param safUrlsReusable set to true to make newly created SAF protocol urls reusable by default
          */
         @JvmStatic
         fun setSafUrlsReusable(safUrlsReusable: Boolean) {
@@ -1921,6 +2090,18 @@ open class FFmpegKitConfig private constructor() {
          */
         @JvmStatic
         external fun nativeFFprobeExecute(sessionId: Long, arguments: Array<String>): Int
+
+        /**
+         * Runs ffprobe capturing its formatted output into a native buffer and
+         * returns the raw UTF-8 bytes, or null when ffprobe returns a non-zero
+         * code. Used by getMediaInformation so the JSON never routes through the
+         * av_log path (which would truncate large values).
+         */
+        @JvmStatic
+        private external fun nativeFFprobeGetMediaInformation(
+            sessionId: Long,
+            arguments: Array<String>
+        ): ByteArray?
 
         /**
          * <p>Cancels an ongoing FFmpeg operation natively. This method does not wait for termination

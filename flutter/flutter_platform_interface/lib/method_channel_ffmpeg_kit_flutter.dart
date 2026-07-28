@@ -162,6 +162,7 @@ class MethodChannelFFmpegKit extends FFmpegKitPlatform {
   Future<String?> ffmpegKitConfigGetFFmpegVersion() async =>
       _channel.invokeMethod<String>('getFFmpegVersion');
 
+  @Deprecated('Flutter builds do not have an LTS build concept.')
   @override
   Future<bool?> ffmpegKitConfigIsLTSBuild() async =>
       _channel.invokeMethod<bool>('isLTSBuild');
@@ -248,6 +249,10 @@ class MethodChannelFFmpegKit extends FFmpegKitPlatform {
       _channel.invokeMethod<void>('clearSessions');
 
   @override
+  Future<void> deleteSession(int sessionId) async =>
+      _channel.invokeMethod<void>('deleteSession', {'sessionId': sessionId});
+
+  @override
   Future<List<dynamic>?> ffmpegKitConfigGetSessionsByState(
           int sessionState) async =>
       _channel.invokeMethod<List<dynamic>>(
@@ -302,14 +307,24 @@ class MethodChannelFFmpegKit extends FFmpegKitPlatform {
 
   @override
   Future<String?> ffmpegKitConfigGetSafParameter(
-          String uriString, String openMode) async =>
-      _channel.invokeMethod<String>(
-          'getSafParameter', {'uri': uriString, 'openMode': openMode});
+          String uriString, String openMode,
+          [bool? reusable]) async =>
+      _channel.invokeMethod<String>('getSafParameter',
+          {'uri': uriString, 'openMode': openMode, 'reusable': reusable});
+
+  @override
+  Future<void> ffmpegKitConfigUnregisterSafProtocolUrl(String safUrl) async =>
+      _channel.invokeMethod<void>(
+          'unregisterSafProtocolUrl', {'safUrl': safUrl});
 
   // FFmpegKitFlutterInitializer
 
   Future<int?> ffmpegKitFlutterInitializerGetLogLevel() async =>
       _channel.invokeMethod<int>('getLogLevel');
+
+  @override
+  Future<void> ffmpegKitFlutterInitializerPrintLoadConfirmation() async =>
+      _channel.invokeMethod<void>('printLoadConfirmation');
 
   // FFmpegSession
 
@@ -365,6 +380,10 @@ class MethodChannelFFmpegKit extends FFmpegKitPlatform {
   @override
   Future<List<dynamic>?> getExternalLibraries() async =>
       _channel.invokeMethod<List<dynamic>>('getExternalLibraries');
+
+  @override
+  Future<List<dynamic>?> getSupportedCameraIds() async =>
+      _channel.invokeMethod<List<dynamic>>('getSupportedCameraIds');
 
   // FFmpegKitInputBuffer
 

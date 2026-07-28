@@ -183,6 +183,7 @@ abstract class FFmpegKitPlatform extends PlatformInterface {
         'ffmpegKitConfigGetFFmpegVersion() has not been implemented!');
   }
 
+  @Deprecated('Flutter builds do not have an LTS build concept.')
   Future<bool?> ffmpegKitConfigIsLTSBuild() async {
     throw UnimplementedError(
         'ffmpegKitConfigIsLTSBuild() has not been implemented!');
@@ -278,6 +279,10 @@ abstract class FFmpegKitPlatform extends PlatformInterface {
     throw UnimplementedError('clearSessions() has not been implemented!');
   }
 
+  Future<void> deleteSession(int sessionId) async {
+    throw UnimplementedError('deleteSession() has not been implemented!');
+  }
+
   Future<List<dynamic>?> ffmpegKitConfigGetSessionsByState(
       int sessionState) async {
     throw UnimplementedError(
@@ -333,9 +338,15 @@ abstract class FFmpegKitPlatform extends PlatformInterface {
   }
 
   Future<String?> ffmpegKitConfigGetSafParameter(
-      String uriString, String openMode) async {
+      String uriString, String openMode,
+      [bool? reusable]) async {
     throw UnimplementedError(
         'ffmpegKitConfigGetSafParameter() has not been implemented!');
+  }
+
+  Future<void> ffmpegKitConfigUnregisterSafProtocolUrl(String safUrl) async {
+    throw UnimplementedError(
+        'ffmpegKitConfigUnregisterSafProtocolUrl() has not been implemented!');
   }
 
   // FFmpegKitFlutterInitializer
@@ -343,6 +354,12 @@ abstract class FFmpegKitPlatform extends PlatformInterface {
   Future<int?> ffmpegKitFlutterInitializerGetLogLevel() async {
     throw UnimplementedError(
         'ffmpegKitFlutterInitializerGetLogLevel() has not been implemented!');
+  }
+
+  Future<void> ffmpegKitFlutterInitializerPrintLoadConfirmation() async {
+    throw UnimplementedError(
+        'ffmpegKitFlutterInitializerPrintLoadConfirmation() has not been '
+        'implemented!');
   }
 
   // FFmpegSession
@@ -397,6 +414,11 @@ abstract class FFmpegKitPlatform extends PlatformInterface {
   Future<List<dynamic>?> getExternalLibraries() async {
     throw UnimplementedError(
         'getExternalLibraries() has not been implemented!');
+  }
+
+  Future<List<dynamic>?> getSupportedCameraIds() async {
+    throw UnimplementedError(
+        'getSupportedCameraIds() has not been implemented!');
   }
 
   // FFmpegKitInputBuffer

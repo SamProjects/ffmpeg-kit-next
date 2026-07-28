@@ -18,7 +18,7 @@ under the prebuilt folder.\n"
   echo -e "Usage: ./$COMMAND ${PROFILE_USAGE}[OPTION]... [VAR=VALUE]...\n"
   echo -e "Specify environment variables as VARIABLE=VALUE to override default build options.\n"
 
-  display_help_options "${PROFILE_OPTION}" "      --jobs=N\t\t\tnumber of jobs to run [auto]\n      --api-level=api\t\toverride Android api level [24]\n      --toolchain=path\t\toverride the default (llvm) toolchain path\n      --no-ffmpeg-kit-protocols\tdisable custom ffmpeg-kit protocols (ffkitsaf, ffkitmem, ffkitstream) [no]"
+  display_help_options "${PROFILE_OPTION}" "      --jobs=N\t\t\tnumber of jobs to run [auto]\n      --api-level=api\t\toverride Android api level [24]\n      --toolchain=path\t\toverride the default (llvm) toolchain path\n      --package-name=name\t\tset FFmpegKit package name in the native build [empty]\n      --no-ffmpeg-kit-protocols\tdisable custom ffmpeg-kit protocols (ffkitsaf, ffkitmem, ffkitstream) [no]"
   display_help_licensing
 
   echo -e "Architectures:"
@@ -36,5 +36,5 @@ under the prebuilt folder.\n"
   display_help_common_libraries
   display_help_gpl_libraries
   display_help_custom_libraries
-  display_help_advanced_options "  --no-archive\t\t\tdo not build Android archive [no]"
+  display_help_advanced_options "  --no-archive\t\t\tdo not build Android archive [no]\n  --prefab\t\t\tadd a prefab payload to the AAR for native/CMake consumers [no]"
 }

@@ -44,7 +44,7 @@
 #import <sys/types.h>
 
 /** Global library version */
-NSString *const FFmpegKitVersion = @"8.1.0";
+NSString *const FFmpegKitVersion = @"8.1.1";
 
 /**
  * Prefix of named pipes created by ffmpeg-kit.
@@ -61,6 +61,8 @@ static int sessionHistorySize;
 static volatile NSMutableDictionary *sessionHistoryMap;
 static NSMutableArray *sessionHistoryList;
 static NSRecursiveLock *sessionHistoryLock;
+static NSHashTable *sessionDeleteListeners;
+static NSRecursiveLock *sessionDeleteListenerLock;
 
 /** Session control variables */
 #define SESSION_MAP_SIZE 1000
@@ -107,6 +109,31 @@ int configuredLogLevel = LevelAVLogInfo;
 #define FFKIT_RESOURCE_OUTPUT 2
 #define FFKIT_DEFAULT_OUTPUT_CAPACITY 4096
 #define FFKIT_DEFAULT_STREAM_CAPACITY 1048576
+
+/*
+ * The two helpers below (ffkit_max_alloc_size and ffkit_int64_add_overflow)
+ * are duplicated verbatim in the Android, Apple and Linux FFmpegKit sources
+ * because there is no shared native layer between the platforms. Keep all
+ * three copies in sync: any change here must be mirrored in the others.
+ */
+static int64_t ffkit_max_alloc_size(void) {
+#if SIZE_MAX > INT64_MAX
+    return INT64_MAX;
+#else
+    return (int64_t)SIZE_MAX;
+#endif
+}
+
+static int ffkit_int64_add_overflow(int64_t left, int64_t right,
+                                    int64_t *result) {
+    if ((right > 0 && left > INT64_MAX - right) ||
+        (right < 0 && left < INT64_MIN - right)) {
+        return 1;
+    }
+
+    *result = left + right;
+    return 0;
+}
 
 typedef struct FFKitMemoryResource {
     int64_t id;
@@ -186,23 +213,56 @@ int ffmpeg_execute(int argc, char **argv);
 /** Forward declaration for function defined in fftools/ffprobe.c */
 int ffprobe_execute(int argc, char **argv);
 
+/** Forward declaration for function defined in fftools/ffprobe.c */
+void ffprobe_set_media_information_buffer(AVBPrint *buffer);
+
 typedef NS_ENUM(NSUInteger, CallbackType) { LogType, StatisticsType };
 
-void deleteExpiredSessions() {
+NSArray *deleteExpiredSessionsLocked() {
+    NSMutableArray *deletedSessionIds = [[NSMutableArray alloc] init];
+
     while ([sessionHistoryList count] > sessionHistorySize) {
         id<Session> first = [sessionHistoryList firstObject];
         if (first != nil) {
+            long sessionId = [first getSessionId];
             [sessionHistoryList removeObjectAtIndex:0];
             [sessionHistoryMap
                 removeObjectForKey:[NSNumber
-                                       numberWithLong:[first getSessionId]]];
+                                       numberWithLong:sessionId]];
+            [deletedSessionIds addObject:[NSNumber numberWithLong:sessionId]];
         }
+    }
+
+    return deletedSessionIds;
+}
+
+void notifySessionDeleted(long sessionId) {
+    [sessionDeleteListenerLock lock];
+    NSArray *listeners = [sessionDeleteListeners allObjects];
+    [sessionDeleteListenerLock unlock];
+
+    for (int i = 0; i < [listeners count]; i++) {
+        id<SessionDeleteListener> listener = [listeners objectAtIndex:i];
+        @try {
+            [listener sessionDeleted:sessionId];
+        } @catch (NSException *exception) {
+            NSLog(@"Exception thrown inside session delete listener. %@",
+                  [exception callStackSymbols]);
+        }
+    }
+}
+
+void notifySessionsDeleted(NSArray *sessionIds) {
+    for (int i = 0; i < [sessionIds count]; i++) {
+        NSNumber *sessionId = [sessionIds objectAtIndex:i];
+        notifySessionDeleted([sessionId longValue]);
     }
 }
 
 void addSessionToSessionHistory(id<Session> session) {
     NSNumber *sessionIdNumber =
         [NSNumber numberWithLong:[session getSessionId]];
+    NSArray *deletedSessionIds = @[];
 
     [sessionHistoryLock lock];
 
@@ -213,10 +273,12 @@ void addSessionToSessionHistory(id<Session> session) {
     if ([sessionHistoryMap objectForKey:sessionIdNumber] == nil) {
         [sessionHistoryMap setObject:session forKey:sessionIdNumber];
         [sessionHistoryList addObject:session];
-        deleteExpiredSessions();
+        deletedSessionIds = deleteExpiredSessionsLocked();
     }
 
     [sessionHistoryLock unlock];
+
+    notifySessionsDeleted(deletedSessionIds);
 }
 
 /**
@@ -757,8 +819,7 @@ static int ffkit_memory_write(void *opaque, const unsigned char *buf, int size) 
         return AVERROR(EBADF);
     }
 
-    requiredSize = handle->position + size;
-    if (requiredSize < handle->position) {
+    if (ffkit_int64_add_overflow(handle->position, size, &requiredSize)) {
         pthread_mutex_unlock(&resource->mutex);
         return AVERROR(EOVERFLOW);
     }
@@ -775,9 +836,9 @@ static int ffkit_memory_write(void *opaque, const unsigned char *buf, int size) 
     }
 
     memcpy(resource->data + handle->position, buf, size);
-    handle->position += size;
-    if (handle->position > resource->size) {
-        resource->size = handle->position;
+    handle->position = requiredSize;
+    if (requiredSize > resource->size) {
+        resource->size = requiredSize;
     }
     pthread_mutex_unlock(&resource->mutex);
 
@@ -805,9 +866,15 @@ static int64_t ffkit_memory_seek(void *opaque, int64_t pos, int whence) {
     if (whence == SEEK_SET) {
         newPosition = pos;
     } else if (whence == SEEK_CUR) {
-        newPosition = handle->position + pos;
+        if (ffkit_int64_add_overflow(handle->position, pos, &newPosition)) {
+            pthread_mutex_unlock(&resource->mutex);
+            return AVERROR(EOVERFLOW);
+        }
     } else if (whence == SEEK_END) {
-        newPosition = resource->size + pos;
+        if (ffkit_int64_add_overflow(resource->size, pos, &newPosition)) {
+            pthread_mutex_unlock(&resource->mutex);
+            return AVERROR(EOVERFLOW);
+        }
     } else {
         pthread_mutex_unlock(&resource->mutex);
         return AVERROR(EINVAL);
@@ -1409,7 +1476,7 @@ int executeFFmpeg(long sessionId, NSArray *arguments) {
     return returnCode;
 }
 
-int executeFFprobe(long sessionId, NSArray *arguments) {
+int executeFFprobeToBuffer(long sessionId, NSArray *arguments, AVBPrint *outputBuffer) {
     NSString *const LIB_NAME = @"ffprobe";
 
     // SETS DEFAULT LOG LEVEL BEFORE STARTING A NEW RUN
@@ -1439,9 +1506,17 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
 
     resetMessagesInTransmit(sessionId);
 
+    // WHEN A BUFFER IS PROVIDED, ffprobe WRITES ITS FORMATTED OUTPUT THERE
+    // INSTEAD OF THE av_log/stdout PATH. THE POINTER IS THREAD-LOCAL INSIDE
+    // ffprobe AND IS CLEARED IMMEDIATELY AFTER THE RUN SO A REUSED THREAD NEVER
+    // SEES A STALE (FINALIZED) BUFFER ON A LATER ffprobe EXECUTION.
+    ffprobe_set_media_information_buffer(outputBuffer);
+
     // RUN
     int returnCode =
         ffprobe_execute(([arguments count] + 1), commandCharPArray);
+
+    ffprobe_set_media_information_buffer(NULL);
 
     // ALWAYS REMOVE THE ID FROM THE MAP
     removeSession(sessionId);
@@ -1451,6 +1526,10 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
     av_free(commandCharPArray);
 
     return returnCode;
+}
+
+int executeFFprobe(long sessionId, NSArray *arguments) {
+    return executeFFprobeToBuffer(sessionId, arguments, NULL);
 }
 
 @implementation FFmpegKitConfig
@@ -1466,6 +1545,8 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
     sessionHistoryMap = [[NSMutableDictionary alloc] init];
     sessionHistoryList = [[NSMutableArray alloc] init];
     sessionHistoryLock = [[NSRecursiveLock alloc] init];
+    sessionDeleteListeners = [NSHashTable weakObjectsHashTable];
+    sessionDeleteListenerLock = [[NSRecursiveLock alloc] init];
 
     for (int i = 0; i < SESSION_MAP_SIZE; i++) {
         atomic_init(&sessionMap[i], 0);
@@ -1515,7 +1596,8 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
     int64_t id;
     FFKitMemoryResource *resource;
 
-    if (bytes == NULL && length > 0) {
+    if ((bytes == NULL && length > 0) ||
+        length > (NSUInteger)ffkit_max_alloc_size()) {
         return 0;
     }
 
@@ -1553,10 +1635,12 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
     FFKitMemoryResource *resource;
     int64_t capacity = initialCapacity > 0 ? initialCapacity
                                            : FFKIT_DEFAULT_OUTPUT_CAPACITY;
-    int64_t maximumCapacity = maxCapacity > 0 ? maxCapacity : INT64_MAX;
+    int64_t maximumCapacity =
+        maxCapacity > 0 ? maxCapacity : ffkit_max_alloc_size();
 
     if (initialCapacity < 0 || maxCapacity < 0 ||
-        capacity > maximumCapacity) {
+        capacity > maximumCapacity || capacity > ffkit_max_alloc_size() ||
+        maximumCapacity > ffkit_max_alloc_size()) {
         return 0;
     }
 
@@ -1683,7 +1767,8 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
     int64_t streamCapacity = capacity > 0 ? capacity
                                           : FFKIT_DEFAULT_STREAM_CAPACITY;
 
-    if (type != FFKIT_RESOURCE_INPUT && type != FFKIT_RESOURCE_OUTPUT) {
+    if (capacity < 0 || streamCapacity > ffkit_max_alloc_size() ||
+        (type != FFKIT_RESOURCE_INPUT && type != FFKIT_RESOURCE_OUTPUT)) {
         return 0;
     }
 
@@ -1921,12 +2006,15 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
                         with:(NSDictionary *)fontNameMapping {
     NSError *error = nil;
     BOOL isDirectory = YES;
+    BOOL isCacheDirectory = YES;
     BOOL isFile = NO;
     int validFontNameMappingCount = 0;
     NSString *tempConfigurationDirectory =
         [NSTemporaryDirectory() stringByAppendingPathComponent:@"fontconfig"];
     NSString *fontConfigurationFile = [tempConfigurationDirectory
         stringByAppendingPathComponent:@"fonts.conf"];
+    NSString *fontConfigurationCacheDirectory = [tempConfigurationDirectory
+        stringByAppendingPathComponent:@"cache"];
 
     if (![[NSFileManager defaultManager]
             fileExistsAtPath:tempConfigurationDirectory
@@ -1943,6 +2031,24 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
             return;
         }
         NSLog(@"Created temporary font conf directory: TRUE.");
+    }
+
+    if (![[NSFileManager defaultManager]
+            fileExistsAtPath:fontConfigurationCacheDirectory
+                 isDirectory:&isCacheDirectory] ||
+        !isCacheDirectory) {
+        if (![[NSFileManager defaultManager]
+                      createDirectoryAtPath:fontConfigurationCacheDirectory
+                withIntermediateDirectories:YES
+                                 attributes:nil
+                                      error:&error]) {
+            NSLog(@"Failed to set font directory. Error received while "
+                  @"creating temp "
+                  @"cache directory: %@.",
+                  error);
+            return;
+        }
+        NSLog(@"Created temporary font cache directory: TRUE.");
     }
 
     if ([[NSFileManager defaultManager] fileExistsAtPath:fontConfigurationFile
@@ -1988,6 +2094,9 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
         [fontConfiguration appendString:fontDirectoryPath];
         [fontConfiguration appendString:@"</dir>\n"];
     }
+    [fontConfiguration appendString:@"    <cachedir>"];
+    [fontConfiguration appendString:fontConfigurationCacheDirectory];
+    [fontConfiguration appendString:@"</cachedir>\n"];
     [fontConfiguration appendString:fontNameMappingBlock];
     [fontConfiguration appendString:@"</fontconfig>\n"];
 
@@ -2070,11 +2179,7 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
 }
 
 + (int)isLTSBuild {
-#if defined(FFMPEG_KIT_LTS)
-    return 1;
-#else
     return 0;
-#endif
 }
 
 + (NSString *)getBuildDate {
@@ -2138,24 +2243,30 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
     [mediaInformationSession startRunning];
 
     @try {
-        int returnCodeValue =
-            executeFFprobe([mediaInformationSession getSessionId],
-                           [mediaInformationSession getArguments]);
-        ReturnCode *returnCode = [[ReturnCode alloc] init:returnCodeValue];
-        [mediaInformationSession complete:returnCode];
-        if ([returnCode isValueSuccess]) {
-            NSArray *allLogs =
-                [mediaInformationSession getAllLogsWithTimeout:waitTimeout];
-            NSMutableString *ffprobeJsonOutput = [[NSMutableString alloc] init];
-            for (int i = 0; i < [allLogs count]; i++) {
-                Log *log = [allLogs objectAtIndex:i];
-                if ([log getLevel] == LevelAVLogStdErr) {
-                    [ffprobeJsonOutput appendString:[log getMessage]];
-                }
+        AVBPrint mediaInformationBuffer;
+        av_bprint_init(&mediaInformationBuffer, 0, AV_BPRINT_SIZE_UNLIMITED);
+        @try {
+            int returnCodeValue = executeFFprobeToBuffer(
+                [mediaInformationSession getSessionId],
+                [mediaInformationSession getArguments], &mediaInformationBuffer);
+            ReturnCode *returnCode = [[ReturnCode alloc] init:returnCodeValue];
+            [mediaInformationSession complete:returnCode];
+
+            // NOTE: waitTimeout is retained for API compatibility but is no
+            // longer used here. ffprobe writes the JSON synchronously into the
+            // buffer below, so it is already complete and does not depend on
+            // async log delivery. Callers that read the session logs afterwards
+            // still get the wait, because getAllLogs applies the timeout itself.
+            if ([returnCode isValueSuccess]) {
+                NSString *ffprobeJsonOutput =
+                    [NSString stringWithCString:mediaInformationBuffer.str
+                                       encoding:NSUTF8StringEncoding];
+                MediaInformation *mediaInformation = [MediaInformationJsonParser
+                    fromWithError:ffprobeJsonOutput];
+                [mediaInformationSession setMediaInformation:mediaInformation];
             }
-            MediaInformation *mediaInformation =
-                [MediaInformationJsonParser fromWithError:ffprobeJsonOutput];
-            [mediaInformationSession setMediaInformation:mediaInformation];
+        } @finally {
+            av_bprint_finalize(&mediaInformationBuffer, NULL);
         }
     } @catch (NSException *exception) {
         [mediaInformationSession fail:exception];
@@ -2370,8 +2481,14 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
                                               @"exceed the hard limit!"
                                      userInfo:nil]);
     } else if (pSessionHistorySize > 0) {
+        NSArray *deletedSessionIds;
+
+        [sessionHistoryLock lock];
         sessionHistorySize = pSessionHistorySize;
-        deleteExpiredSessions();
+        deletedSessionIds = deleteExpiredSessionsLocked();
+        [sessionHistoryLock unlock];
+
+        notifySessionsDeleted(deletedSessionIds);
     }
 }
 
@@ -2387,15 +2504,42 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
 }
 
 + (void)deleteSession:(long)sessionId {
+    NSNumber *deletedSessionId = nil;
+
     [sessionHistoryLock lock];
 
     id<Session> session = [sessionHistoryMap objectForKey:[NSNumber numberWithLong:sessionId]];
     if (session != nil) {
         [sessionHistoryMap removeObjectForKey:[NSNumber numberWithLong:sessionId]];
         [sessionHistoryList removeObject:session];
+        deletedSessionId = [NSNumber numberWithLong:[session getSessionId]];
     }
 
     [sessionHistoryLock unlock];
+
+    if (deletedSessionId != nil) {
+        notifySessionDeleted([deletedSessionId longValue]);
+    }
+}
+
++ (void)addSessionDeleteListener:(id<SessionDeleteListener>)listener {
+    if (listener == nil) {
+        return;
+    }
+
+    [sessionDeleteListenerLock lock];
+    [sessionDeleteListeners addObject:listener];
+    [sessionDeleteListenerLock unlock];
+}
+
++ (void)removeSessionDeleteListener:(id<SessionDeleteListener>)listener {
+    if (listener == nil) {
+        return;
+    }
+
+    [sessionDeleteListenerLock lock];
+    [sessionDeleteListeners removeObject:listener];
+    [sessionDeleteListenerLock unlock];
 }
 
 + (id<Session>)getLastSession {
@@ -2437,12 +2581,21 @@ int executeFFprobe(long sessionId, NSArray *arguments) {
 }
 
 + (void)clearSessions {
+    NSMutableArray *deletedSessionIds = [[NSMutableArray alloc] init];
+
     [sessionHistoryLock lock];
+
+    for (int i = 0; i < [sessionHistoryList count]; i++) {
+        id<Session> session = [sessionHistoryList objectAtIndex:i];
+        [deletedSessionIds addObject:[NSNumber numberWithLong:[session getSessionId]]];
+    }
 
     [sessionHistoryList removeAllObjects];
     [sessionHistoryMap removeAllObjects];
 
     [sessionHistoryLock unlock];
+
+    notifySessionsDeleted(deletedSessionIds);
 }
 
 + (NSArray *)getFFmpegSessions {

@@ -69,6 +69,9 @@ static int sessionHistorySize;
 static std::map<long, std::shared_ptr<ffmpegkit::Session>> sessionHistoryMap;
 static std::list<std::shared_ptr<ffmpegkit::Session>> sessionHistoryList;
 static std::recursive_mutex sessionMutex;
+static std::list<std::weak_ptr<ffmpegkit::SessionDeleteListener>>
+    sessionDeleteListeners;
+static std::recursive_mutex sessionDeleteListenerMutex;
 
 /** Session control variables */
 #define SESSION_MAP_SIZE 1000
@@ -115,6 +118,33 @@ int configuredLogLevel = ffmpegkit::LevelAVLogInfo;
 #define FFKIT_RESOURCE_OUTPUT 2
 #define FFKIT_DEFAULT_OUTPUT_CAPACITY 4096
 #define FFKIT_DEFAULT_STREAM_CAPACITY 1048576
+
+/*
+ * The two helpers below (ffkit_max_alloc_size and ffkit_int64_add_overflow)
+ * are duplicated verbatim in the Android, Apple and Linux FFmpegKit sources
+ * because there is no shared native layer between the platforms. Keep all
+ * three copies in sync: any change here must be mirrored in the others.
+ */
+static int64_t ffkit_max_alloc_size() {
+    const uint64_t maxSize =
+        (uint64_t)std::numeric_limits<size_t>::max();
+    const uint64_t maxInt64 =
+        (uint64_t)std::numeric_limits<int64_t>::max();
+    return (int64_t)std::min(maxSize, maxInt64);
+}
+
+static bool ffkit_int64_add_overflow(const int64_t left, const int64_t right,
+                                     int64_t *result) {
+    if ((right > 0 &&
+         left > std::numeric_limits<int64_t>::max() - right) ||
+        (right < 0 &&
+         left < std::numeric_limits<int64_t>::min() - right)) {
+        return true;
+    }
+
+    *result = left + right;
+    return false;
+}
 
 typedef struct FFKitMemoryResource {
     int64_t id;
@@ -198,6 +228,9 @@ int ffmpeg_execute(int argc, char **argv);
 /** Forward declaration for function defined in fftools/ffprobe.c */
 int ffprobe_execute(int argc, char **argv);
 
+/** Forward declaration for function defined in fftools/ffprobe.c */
+void ffprobe_set_media_information_buffer(AVBPrint *buffer);
+
 void ffmpegkit_log_callback_function(void *ptr, int level, const char *format,
                                      va_list vargs);
 
@@ -251,19 +284,65 @@ static bool fs_create_dir(const std::string &s) {
     return true;
 }
 
-void deleteExpiredSessions() {
+std::list<long> deleteExpiredSessionsLocked() {
+    std::list<long> deletedSessionIds;
+
     while (sessionHistoryList.size() > sessionHistorySize) {
         auto first = sessionHistoryList.front();
         if (first != nullptr) {
+            const long sessionId = first->getSessionId();
             sessionHistoryList.pop_front();
-            sessionHistoryMap.erase(first->getSessionId());
+            sessionHistoryMap.erase(sessionId);
+            deletedSessionIds.push_back(sessionId);
         }
+    }
+
+    return deletedSessionIds;
+}
+
+void notifySessionDeleted(const long sessionId) {
+    std::list<std::shared_ptr<ffmpegkit::SessionDeleteListener>> listeners;
+
+    std::unique_lock<std::recursive_mutex> listenerLock(
+        sessionDeleteListenerMutex, std::defer_lock);
+    listenerLock.lock();
+
+    for (auto it = sessionDeleteListeners.begin();
+         it != sessionDeleteListeners.end();) {
+        auto listener = it->lock();
+        if (listener == nullptr) {
+            it = sessionDeleteListeners.erase(it);
+        } else {
+            listeners.push_back(listener);
+            ++it;
+        }
+    }
+
+    listenerLock.unlock();
+
+    for (auto it = listeners.begin(); it != listeners.end(); ++it) {
+        try {
+            (*it)->sessionDeleted(sessionId);
+        } catch (const std::exception &exception) {
+            std::cout << "Exception thrown inside session delete listener. "
+                      << exception.what() << std::endl;
+        } catch (...) {
+            std::cout << "Exception thrown inside session delete listener."
+                      << std::endl;
+        }
+    }
+}
+
+void notifySessionsDeleted(const std::list<long> &sessionIds) {
+    for (auto it = sessionIds.begin(); it != sessionIds.end(); ++it) {
+        notifySessionDeleted(*it);
     }
 }
 
 void addSessionToSessionHistory(
     const std::shared_ptr<ffmpegkit::Session> session) {
     std::unique_lock<std::recursive_mutex> lock(sessionMutex, std::defer_lock);
+    std::list<long> deletedSessionIds;
 
     const long sessionId = session->getSessionId();
 
@@ -276,10 +355,12 @@ void addSessionToSessionHistory(
     if (sessionHistoryMap.count(sessionId) == 0) {
         sessionHistoryMap.insert({sessionId, session});
         sessionHistoryList.push_back(session);
-        deleteExpiredSessions();
+        deletedSessionIds = deleteExpiredSessionsLocked();
     }
 
     lock.unlock();
+
+    notifySessionsDeleted(deletedSessionIds);
 }
 
 /**
@@ -712,7 +793,7 @@ static int ffkit_memory_read(void *opaque, unsigned char *buf, int size) {
 
     if (handle->position >= resource->size) {
         pthread_mutex_unlock(&resource->mutex);
-        return 0;
+        return AVERROR_EOF;
     }
 
     bytesToRead = (int)FFMIN((int64_t)size, resource->size - handle->position);
@@ -773,8 +854,7 @@ static int ffkit_memory_write(void *opaque, const unsigned char *buf, int size) 
         return AVERROR(EBADF);
     }
 
-    requiredSize = handle->position + size;
-    if (requiredSize < handle->position) {
+    if (ffkit_int64_add_overflow(handle->position, size, &requiredSize)) {
         pthread_mutex_unlock(&resource->mutex);
         return AVERROR(EOVERFLOW);
     }
@@ -791,9 +871,9 @@ static int ffkit_memory_write(void *opaque, const unsigned char *buf, int size) 
     }
 
     memcpy(resource->data + handle->position, buf, size);
-    handle->position += size;
-    if (handle->position > resource->size) {
-        resource->size = handle->position;
+    handle->position = requiredSize;
+    if (requiredSize > resource->size) {
+        resource->size = requiredSize;
     }
     pthread_mutex_unlock(&resource->mutex);
 
@@ -821,9 +901,15 @@ static int64_t ffkit_memory_seek(void *opaque, int64_t pos, int whence) {
     if (whence == SEEK_SET) {
         newPosition = pos;
     } else if (whence == SEEK_CUR) {
-        newPosition = handle->position + pos;
+        if (ffkit_int64_add_overflow(handle->position, pos, &newPosition)) {
+            pthread_mutex_unlock(&resource->mutex);
+            return AVERROR(EOVERFLOW);
+        }
     } else if (whence == SEEK_END) {
-        newPosition = resource->size + pos;
+        if (ffkit_int64_add_overflow(resource->size, pos, &newPosition)) {
+            pthread_mutex_unlock(&resource->mutex);
+            return AVERROR(EOVERFLOW);
+        }
     } else {
         pthread_mutex_unlock(&resource->mutex);
         return AVERROR(EINVAL);
@@ -1021,7 +1107,7 @@ static int ffkit_stream_read(void *opaque, unsigned char *buf, int size) {
     }
 
     ret = ffkit_stream_read_bytes(handle->resource, buf, size, -1, NULL, &eof);
-    return eof ? 0 : ret;
+    return eof ? AVERROR_EOF : ret;
 }
 
 static int ffkit_stream_write(void *opaque, const unsigned char *buf, int size) {
@@ -1421,8 +1507,10 @@ executeFFmpeg(const long sessionId,
     return returnCode;
 }
 
-int executeFFprobe(const long sessionId,
-                   const std::shared_ptr<std::list<std::string>> arguments) {
+int executeFFprobeToBuffer(
+    const long sessionId,
+    const std::shared_ptr<std::list<std::string>> arguments,
+    AVBPrint *outputBuffer) {
     const char *LIB_NAME = "ffprobe";
 
     // SETS DEFAULT LOG LEVEL BEFORE STARTING A NEW RUN
@@ -1452,9 +1540,17 @@ int executeFFprobe(const long sessionId,
 
     resetMessagesInTransmit(sessionId);
 
+    // WHEN A BUFFER IS PROVIDED, ffprobe WRITES ITS FORMATTED OUTPUT THERE
+    // INSTEAD OF THE av_log/stdout PATH. THE POINTER IS THREAD-LOCAL INSIDE
+    // ffprobe AND IS CLEARED IMMEDIATELY AFTER THE RUN SO A REUSED THREAD NEVER
+    // SEES A STALE (FINALIZED) BUFFER ON A LATER ffprobe EXECUTION.
+    ffprobe_set_media_information_buffer(outputBuffer);
+
     // RUN
     int returnCode =
         ffprobe_execute((arguments->size() + 1), commandCharPArray);
+
+    ffprobe_set_media_information_buffer(NULL);
 
     // ALWAYS REMOVE THE ID FROM THE MAP
     removeSession(sessionId);
@@ -1466,10 +1562,13 @@ int executeFFprobe(const long sessionId,
     return returnCode;
 }
 
+int executeFFprobe(const long sessionId,
+                   const std::shared_ptr<std::list<std::string>> arguments) {
+    return executeFFprobeToBuffer(sessionId, arguments, nullptr);
+}
+
 void *ffmpegKitInitialize() {
     std::call_once(ffmpegKitInitializerFlag, []() {
-        std::cout << "Loading ffmpeg-kit-next." << std::endl;
-
         sessionHistorySize = 10;
 
         for (int i = 0; i < SESSION_MAP_SIZE; i++) {
@@ -1499,8 +1598,12 @@ void *ffmpegKitInitialize() {
 
         ffmpegkit::FFmpegKitConfig::enableRedirection();
 
+        const std::string packageName = ffmpegkit::Packages::getPackageName();
+        const std::string packageNamePart =
+            packageName.empty() ? "" : packageName + "-";
+
         std::cout << "Loaded ffmpeg-kit-next-"
-                  << ffmpegkit::ArchDetect::getArch() << "-"
+                  << packageNamePart << ffmpegkit::ArchDetect::getArch() << "-"
                   << ffmpegkit::FFmpegKitConfig::getVersion() << "-"
                   << ffmpegkit::FFmpegKitConfig::getBuildDate() << "."
                   << std::endl;
@@ -1588,9 +1691,11 @@ void ffmpegkit::FFmpegKitConfig::setFontDirectoryList(
     auto tempConfigurationDirectory = ffmpegKitDir + "/fontconfig";
     auto fontConfigurationFile =
         std::string(tempConfigurationDirectory) + "/fonts.conf";
+    auto fontConfigurationCacheDirectory = tempConfigurationDirectory + "/cache";
 
     if (!fs_create_dir(cacheDir) || !fs_create_dir(ffmpegKitDir) ||
-        !fs_create_dir(tempConfigurationDirectory)) {
+        !fs_create_dir(tempConfigurationDirectory) ||
+        !fs_create_dir(fontConfigurationCacheDirectory)) {
         return;
     }
     std::cout << "Created temporary font conf directory: TRUE." << std::endl;
@@ -1638,6 +1743,9 @@ void ffmpegkit::FFmpegKitConfig::setFontDirectoryList(
         fontConfiguration += fontDirectoryPath;
         fontConfiguration += "</dir>\n";
     }
+    fontConfiguration += "    <cachedir>";
+    fontConfiguration += fontConfigurationCacheDirectory;
+    fontConfiguration += "</cachedir>\n";
     fontConfiguration += fontNameMappingBlock;
     fontConfiguration += "</fontconfig>\n";
 
@@ -1723,7 +1831,7 @@ long ffmpegkit::FFmpegKitConfig::registerFFmpegKitInputBuffer(
     if (data == NULL && size > 0) {
         return 0;
     }
-    if (size > (size_t)std::numeric_limits<int64_t>::max()) {
+    if (size > (size_t)ffkit_max_alloc_size()) {
         return 0;
     }
 
@@ -1762,10 +1870,11 @@ long ffmpegkit::FFmpegKitConfig::registerFFmpegKitOutputBuffer(
     int64_t capacity =
         initialCapacity > 0 ? initialCapacity : FFKIT_DEFAULT_OUTPUT_CAPACITY;
     int64_t maximumCapacity =
-        maxCapacity > 0 ? maxCapacity : std::numeric_limits<int64_t>::max();
+        maxCapacity > 0 ? maxCapacity : ffkit_max_alloc_size();
 
     if (initialCapacity < 0 || maxCapacity < 0 ||
-        capacity > maximumCapacity) {
+        capacity > maximumCapacity || capacity > ffkit_max_alloc_size() ||
+        maximumCapacity > ffkit_max_alloc_size()) {
         return 0;
     }
 
@@ -1874,7 +1983,8 @@ long ffmpegkit::FFmpegKitConfig::registerFFmpegKitStream(const long capacity,
     int64_t streamCapacity =
         capacity > 0 ? capacity : FFKIT_DEFAULT_STREAM_CAPACITY;
 
-    if (type != FFKIT_RESOURCE_INPUT && type != FFKIT_RESOURCE_OUTPUT) {
+    if (capacity < 0 || streamCapacity > ffkit_max_alloc_size() ||
+        (type != FFKIT_RESOURCE_INPUT && type != FFKIT_RESOURCE_OUTPUT)) {
         return 0;
     }
 
@@ -2075,19 +2185,11 @@ std::string ffmpegkit::FFmpegKitConfig::getFFmpegVersion() {
 }
 
 std::string ffmpegkit::FFmpegKitConfig::getVersion() {
-    if (FFmpegKitConfig::isLTSBuild()) {
-        return std::string("").append(FFmpegKitVersion).append("-lts");
-    } else {
-        return FFmpegKitVersion;
-    }
+    return FFmpegKitVersion;
 }
 
 bool ffmpegkit::FFmpegKitConfig::isLTSBuild() {
-#if defined(FFMPEG_KIT_LTS)
-    return true;
-#else
     return false;
-#endif
 }
 
 std::string ffmpegkit::FFmpegKitConfig::getBuildDate() {
@@ -2157,29 +2259,30 @@ void ffmpegkit::FFmpegKitConfig::getMediaInformationExecute(
     const int waitTimeout) {
     mediaInformationSession->startRunning();
 
+    AVBPrint mediaInformationBuffer;
+    av_bprint_init(&mediaInformationBuffer, 0, AV_BPRINT_SIZE_UNLIMITED);
     try {
-        int returnCodeValue =
-            executeFFprobe(mediaInformationSession->getSessionId(),
-                           mediaInformationSession->getArguments());
+        int returnCodeValue = executeFFprobeToBuffer(
+            mediaInformationSession->getSessionId(),
+            mediaInformationSession->getArguments(), &mediaInformationBuffer);
         auto returnCode =
             std::make_shared<ffmpegkit::ReturnCode>(returnCodeValue);
         mediaInformationSession->complete(returnCode);
+
+        // NOTE: waitTimeout is retained for API compatibility but is no longer
+        // used here. ffprobe writes the JSON synchronously into the buffer
+        // below, so it is already complete and does not depend on async log
+        // delivery. Callers that read the session logs afterwards still get the
+        // wait, because getAllLogs applies the timeout itself.
         if (returnCode->isValueSuccess()) {
-            auto allLogs =
-                mediaInformationSession->getAllLogsWithTimeout(waitTimeout);
-            std::string ffprobeJsonOutput;
-            std::for_each(allLogs->cbegin(), allLogs->cend(),
-                          [&](std::shared_ptr<ffmpegkit::Log> log) {
-                              if (log->getLevel() == LevelAVLogStdErr) {
-                                  ffprobeJsonOutput.append(log->getMessage());
-                              }
-                          });
             auto mediaInformation =
                 ffmpegkit::MediaInformationJsonParser::fromWithError(
-                    ffprobeJsonOutput.c_str());
+                    mediaInformationBuffer.str);
             mediaInformationSession->setMediaInformation(mediaInformation);
         }
+        av_bprint_finalize(&mediaInformationBuffer, NULL);
     } catch (const std::exception &exception) {
+        av_bprint_finalize(&mediaInformationBuffer, NULL);
         mediaInformationSession->fail(exception.what());
         std::cout << "Get media information execute failed: "
                   << ffmpegkit::FFmpegKitConfig::argumentsToString(
@@ -2391,8 +2494,17 @@ void ffmpegkit::FFmpegKitConfig::setSessionHistorySize(
         throw std::runtime_error(
             "Session history size must not exceed the hard limit!");
     } else if (newSessionHistorySize > 0) {
+        std::list<long> deletedSessionIds;
+        std::unique_lock<std::recursive_mutex> lock(sessionMutex,
+                                                    std::defer_lock);
+        lock.lock();
+
         sessionHistorySize = newSessionHistorySize;
-        deleteExpiredSessions();
+        deletedSessionIds = deleteExpiredSessionsLocked();
+
+        lock.unlock();
+
+        notifySessionsDeleted(deletedSessionIds);
     }
 }
 
@@ -2411,14 +2523,73 @@ ffmpegkit::FFmpegKitConfig::getSession(const long sessionId) {
 
 void ffmpegkit::FFmpegKitConfig::deleteSession(const long sessionId) {
     std::unique_lock<std::recursive_mutex> lock(sessionMutex, std::defer_lock);
+    bool deleted = false;
+
     lock.lock();
 
-    sessionHistoryMap.erase(sessionId);
-    auto it = std::remove_if(sessionHistoryList.begin(), sessionHistoryList.end(),
-                             [sessionId](std::shared_ptr<ffmpegkit::Session> session) {
-                                 return session->getSessionId() == sessionId;
-                             });
-    sessionHistoryList.erase(it, sessionHistoryList.end());
+    deleted = sessionHistoryMap.erase(sessionId) > 0;
+    if (deleted) {
+        auto it = std::remove_if(
+            sessionHistoryList.begin(), sessionHistoryList.end(),
+            [sessionId](std::shared_ptr<ffmpegkit::Session> session) {
+                return session->getSessionId() == sessionId;
+            });
+        sessionHistoryList.erase(it, sessionHistoryList.end());
+    }
+
+    lock.unlock();
+
+    if (deleted) {
+        notifySessionDeleted(sessionId);
+    }
+}
+
+void ffmpegkit::FFmpegKitConfig::addSessionDeleteListener(
+    const std::shared_ptr<ffmpegkit::SessionDeleteListener> listener) {
+    if (listener == nullptr) {
+        return;
+    }
+
+    std::unique_lock<std::recursive_mutex> listenerLock(
+        sessionDeleteListenerMutex, std::defer_lock);
+    listenerLock.lock();
+
+    for (auto it = sessionDeleteListeners.begin();
+         it != sessionDeleteListeners.end();) {
+        auto existingListener = it->lock();
+        if (existingListener == nullptr || existingListener == listener) {
+            it = sessionDeleteListeners.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    sessionDeleteListeners.push_back(listener);
+
+    listenerLock.unlock();
+}
+
+void ffmpegkit::FFmpegKitConfig::removeSessionDeleteListener(
+    const std::shared_ptr<ffmpegkit::SessionDeleteListener> listener) {
+    if (listener == nullptr) {
+        return;
+    }
+
+    std::unique_lock<std::recursive_mutex> listenerLock(
+        sessionDeleteListenerMutex, std::defer_lock);
+    listenerLock.lock();
+
+    for (auto it = sessionDeleteListeners.begin();
+         it != sessionDeleteListeners.end();) {
+        auto existingListener = it->lock();
+        if (existingListener == nullptr || existingListener == listener) {
+            it = sessionDeleteListeners.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    listenerLock.unlock();
 }
 
 std::shared_ptr<ffmpegkit::Session>
@@ -2426,7 +2597,11 @@ ffmpegkit::FFmpegKitConfig::getLastSession() {
     std::unique_lock<std::recursive_mutex> lock(sessionMutex, std::defer_lock);
     lock.lock();
 
-    return sessionHistoryList.front();
+    if (sessionHistoryList.empty()) {
+        return nullptr;
+    }
+
+    return sessionHistoryList.back();
 }
 
 std::shared_ptr<ffmpegkit::Session>
@@ -2462,12 +2637,24 @@ ffmpegkit::FFmpegKitConfig::getSessions() {
 
 void ffmpegkit::FFmpegKitConfig::clearSessions() {
     std::unique_lock<std::recursive_mutex> lock(sessionMutex, std::defer_lock);
+    std::list<long> deletedSessionIds;
+
     lock.lock();
+
+    for (auto it = sessionHistoryList.begin(); it != sessionHistoryList.end();
+         ++it) {
+        auto session = *it;
+        if (session != nullptr) {
+            deletedSessionIds.push_back(session->getSessionId());
+        }
+    }
 
     sessionHistoryList.clear();
     sessionHistoryMap.clear();
 
     lock.unlock();
+
+    notifySessionsDeleted(deletedSessionIds);
 }
 
 std::shared_ptr<std::list<std::shared_ptr<ffmpegkit::FFmpegSession>>>

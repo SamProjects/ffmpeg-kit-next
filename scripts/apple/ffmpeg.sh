@@ -102,7 +102,7 @@ arm64)
   TARGET_CPU="armv8"
   TARGET_ARCH="aarch64"
   ASM_OPTIONS=" --enable-neon --enable-asm"
-  if [[ ${FFMPEG_KIT_BUILD_TYPE} != "macos" ]]; then
+  if [[ ${FFMPEG_KIT_BUILD_TYPE} != "macos" ]] && [[ ${FFMPEG_KIT_BUILD_TYPE} != "visionos" ]]; then
     BITCODE_FLAGS="-fembed-bitcode -Wc,-fembed-bitcode"
   fi
   ;;
@@ -386,7 +386,7 @@ for library in {0..61} ${LIBRARY_VVENC} ${LIBRARY_LIBSVTAV1} ${LIBRARY_LIBJXL} $
       FFMPEG_CFLAGS+=" $(pkg-config --cflags hogweed 2>>"${BASEDIR}"/build.log)"
       FFMPEG_LDFLAGS+=" $(pkg-config --libs --static hogweed 2>>"${BASEDIR}"/build.log)"
       ;;
-    ios-* | tvos-* | macos-*)
+    ios-* | tvos-* | macos-* | visionos-*)
 
       # BUILT-IN LIBRARIES SHARE INCLUDE AND LIB DIRECTORIES
       # INCLUDING ONLY ONE OF THEM IS ENOUGH
@@ -454,6 +454,10 @@ for library in {0..61} ${LIBRARY_VVENC} ${LIBRARY_LIBSVTAV1} ${LIBRARY_LIBJXL} $
             CONFIGURE_POSTFIX+=" --disable-filter=scale_vt"
             echo -e "WARN: Disabled scale_vt filter as it requires min sdk version >= 16.0 for tvos. Currently it is set to $TVOS_MIN_VERSION.\n" 1>>"${BASEDIR}"/build.log 2>&1
           fi
+        elif [[ ${FFMPEG_KIT_BUILD_TYPE} == "visionos" ]]; then
+
+          # visionOS 1.0 ships modern VideoToolbox; scale_vt is available
+          CONFIGURE_POSTFIX+=" --enable-videotoolbox"
         fi
         ;;
       *-zlib)
@@ -579,8 +583,8 @@ git checkout libavutil 1>>"${BASEDIR}"/build.log 2>&1
 # 1. Workaround to prevent adding of -mdynamic-no-pic flag
 ${SED_INLINE} 's/check_cflags -mdynamic-no-pic && add_asflags -mdynamic-no-pic;/check_cflags -mdynamic-no-pic;/g' "${BASEDIR}"/src/${LIB_NAME}/configure 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 
-# 2. Workaround for videotoolbox on mac catalyst
-if [[ ${ARCH} == *-mac-catalyst ]]; then
+# 2. Workaround for videotoolbox on mac catalyst and visionOS
+if [[ ${ARCH} == *-mac-catalyst ]] || [[ ${FFMPEG_KIT_BUILD_TYPE} == "visionos" ]]; then
   ${SED_INLINE} 's/    CFDictionarySetValue(buffer_attributes\, kCVPixelBufferOpenGLESCompatibilityKey/   \/\/ CFDictionarySetValue(buffer_attributes\, kCVPixelBufferOpenGLESCompatibilityKey/g' "${BASEDIR}"/src/${LIB_NAME}/libavcodec/videotoolbox.c || return 1
 else
   ${SED_INLINE} 's/   \/\/ CFDictionarySetValue(buffer_attributes\, kCVPixelBufferOpenGLESCompatibilityKey/    CFDictionarySetValue(buffer_attributes\, kCVPixelBufferOpenGLESCompatibilityKey/g' "${BASEDIR}"/src/${LIB_NAME}/libavcodec/videotoolbox.c || return 1
@@ -590,13 +594,14 @@ fi
 if [[ ${NO_FFMPEG_KIT_PROTOCOLS} == "1" ]]; then
   echo -e "\nINFO: Disabled custom ffmpeg-kit protocols\n" 1>>"${BASEDIR}"/build.log 2>&1
 else
-  cat ../../tools/protocols/libavformat_ffkitmem_stream.c >> libavformat/file.c
-  cat ../../tools/protocols/libavutil_file.h >> libavutil/file.h
-  cat ../../tools/protocols/libavutil_file.c >> libavutil/file.c
+  cat ../../tools/protocols/libavformat_file_ffkitmem_stream.c >> libavformat/file.c
+  cat ../../tools/protocols/libavutil_file_h.inc >> libavutil/file.h
+  cat ../../tools/protocols/libavutil_file_c.inc >> libavutil/file.c
   awk '{gsub(/ff_file_protocol;/,"ff_file_protocol;\nextern const URLProtocol ff_ffkitmem_protocol;\nextern const URLProtocol ff_ffkitstream_protocol;")}1' libavformat/protocols.c > libavformat/protocols.c.tmp
   cat libavformat/protocols.c.tmp > libavformat/protocols.c
   ${SED_INLINE} "s|av_strstart(proto_name, \"file\", NULL))|av_strstart(proto_name, \"file\", NULL) \|\| av_strstart(proto_name, \"ffkitmem\", NULL) \|\| av_strstart(proto_name, \"ffkitstream\", NULL))|g" libavformat/hls.c 1>>"${BASEDIR}"/build.log 2>&1
   echo -e "\nINFO: Enabled custom ffmpeg-kit protocols\n" 1>>"${BASEDIR}"/build.log 2>&1
+  "${BASEDIR}/scripts/apple/ffmpeg-kit-protocols-test.sh" "${BASEDIR}" "${BASEDIR}/src/${LIB_NAME}" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 fi
 
 # 3. Use thread local log levels

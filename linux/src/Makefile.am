@@ -11,6 +11,7 @@ libffmpegkit_la_SOURCES = \
     AbstractSession.cpp \
     ArchDetect.cpp \
     Chapter.cpp \
+    json/Value.cpp \
     FFmpegKit.cpp \
     FFmpegKitConfig.cpp \
     FFmpegKitInputBuffer.cpp \
@@ -60,6 +61,11 @@ libffmpegkit_la_SOURCES = \
     fftools/textformat/tw_buffer.c \
     fftools/textformat/tw_stdout.c
 
+# json/Value.h is installed with its subdirectory preserved so that the
+# "json/Value.h" include in the public headers keeps resolving after install
+nobase_include_HEADERS = \
+    json/Value.h
+
 include_HEADERS = \
     AbstractSession.h \
     ArchDetect.h \
@@ -86,8 +92,8 @@ include_HEADERS = \
     Packages.h \
     ReturnCode.h \
     Session.h \
+    SessionDeleteListener.h \
     SessionState.h \
-    Signal.h \
     Statistics.h \
     StatisticsCallback.h \
     StreamInformation.h \

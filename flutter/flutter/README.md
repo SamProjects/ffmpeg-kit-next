@@ -4,7 +4,7 @@
 
 - Includes both `FFmpeg` and `FFprobe`
 - Supports
-    - `Android`, `iOS`, `iPadOS` and `macOS`
+    - `Android`, `iOS`, `iPadOS`, `macOS` and `Linux`
     - `arm-v7a`, `arm-v7a-neon`, `arm64-v8a`, `x86` and `x86_64` architectures on Android
     - `Android API Level 24` or later
     - `armv7`, `armv7s`, `arm64`, `arm64-simulator`, `i386`, `x86_64`, `x86_64-mac-catalyst` and `arm64-mac-catalyst`
@@ -13,6 +13,7 @@
     - iPad devices and the iPad Simulator load `iOS` frameworks/xcframeworks
     - `arm64` and `x86_64` architectures on macOS
     - `macOS 10.15+` deployment targets
+    - `x86_64` and `arm64` architectures on Linux
     - Can process Storage Access Framework (SAF) Uris on Android
     - 25 external libraries
 
@@ -228,8 +229,13 @@ The following table shows Android API level, iOS/iPadOS deployment target and ma
 - Reading a file:
   ```dart
   FFmpegKitConfig.selectDocumentForRead('*/*').then((uri) {
-    FFmpegKitConfig.getSafParameterForRead(uri!).then((safUrl) {
-      FFmpegKit.executeAsync("-i ${safUrl!} -c:v mpeg4 file2.mp4");
+    // By default a saf url can be used only once and is released automatically
+    // when the execution completes. Pass the optional reusable flag to use the
+    // same url in more than one command and release it manually afterwards.
+    FFmpegKitConfig.getSafParameterForRead(uri!, true).then((safUrl) {
+      FFmpegKit.executeAsync("-i ${safUrl!} -c:v mpeg4 file2.mp4").then((_) {
+        FFmpegKitConfig.unregisterSafProtocolUrl(safUrl);
+      });
     });
   });
   ```
@@ -303,6 +309,30 @@ The following table shows Android API level, iOS/iPadOS deployment target and ma
 
     ```dart
     FFmpegKitConfig.setFontDirectoryList(["/system/fonts", "/System/Library/Fonts", "<folder with fonts>"]);
+    ```
+
+11. (Android) Get the camera ids supported by the native camera input.
+
+    ```dart
+    FFmpegKitConfig.getSupportedCameraIds().then((cameraIds) {
+      cameraIds.forEach((cameraId) {
+        print("Camera id: $cameraId");
+      });
+    });
+    ```
+
+12. Use the Flutter API from an isolate.
+
+    ```dart
+    import 'package:flutter/services.dart';
+
+    Future<void> ffmpegWorker(RootIsolateToken rootIsolateToken) async {
+      BackgroundIsolateBinaryMessenger.ensureInitialized(rootIsolateToken);
+      await FFmpegKitConfig.init(printLoadConfirmation: false);
+
+      final session = await FFmpegKit.execute('-version');
+      final output = await session.getOutput();
+    }
     ```
 
 ### 4. Test Application

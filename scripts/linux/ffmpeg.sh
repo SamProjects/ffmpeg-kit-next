@@ -53,6 +53,11 @@ TARGET_CPU=""
 TARGET_ARCH=""
 ASM_OPTIONS=""
 case ${ARCH} in
+arm64)
+  TARGET_CPU="armv8-a"
+  TARGET_ARCH="aarch64"
+  ASM_OPTIONS=" --enable-neon --enable-asm --enable-inline-asm"
+  ;;
 x86-64)
   TARGET_CPU="x86-64"
   TARGET_ARCH="x86_64"
@@ -409,13 +414,14 @@ ${SED_INLINE} 's/static atomic_int av_log_level/__thread atomic_int av_log_level
 if [[ ${NO_FFMPEG_KIT_PROTOCOLS} == "1" ]]; then
   echo -e "\nINFO: Disabled custom ffmpeg-kit protocols\n" 1>>"${BASEDIR}"/build.log 2>&1
 else
-  cat ../../tools/protocols/libavformat_ffkitmem_stream.c >> libavformat/file.c
-  cat ../../tools/protocols/libavutil_file.h >> libavutil/file.h
-  cat ../../tools/protocols/libavutil_file.c >> libavutil/file.c
+  cat ../../tools/protocols/libavformat_file_ffkitmem_stream.c >> libavformat/file.c
+  cat ../../tools/protocols/libavutil_file_h.inc >> libavutil/file.h
+  cat ../../tools/protocols/libavutil_file_c.inc >> libavutil/file.c
   awk '{gsub(/ff_file_protocol;/,"ff_file_protocol;\nextern const URLProtocol ff_ffkitmem_protocol;\nextern const URLProtocol ff_ffkitstream_protocol;")}1' libavformat/protocols.c > libavformat/protocols.c.tmp
   cat libavformat/protocols.c.tmp > libavformat/protocols.c
   ${SED_INLINE} "s|av_strstart(proto_name, \"file\", NULL))|av_strstart(proto_name, \"file\", NULL) \|\| av_strstart(proto_name, \"ffkitmem\", NULL) \|\| av_strstart(proto_name, \"ffkitstream\", NULL))|g" libavformat/hls.c 1>>"${BASEDIR}"/build.log 2>&1
   echo -e "\nINFO: Enabled custom ffmpeg-kit protocols\n" 1>>"${BASEDIR}"/build.log 2>&1
+  "${BASEDIR}/scripts/linux/ffmpeg-kit-protocols-test.sh" "${BASEDIR}" "${BASEDIR}/src/${LIB_NAME}" 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 fi
 
 ###################################################################

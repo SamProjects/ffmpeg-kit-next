@@ -42,6 +42,21 @@ typedef NS_ENUM(NSUInteger, Signal) {
 };
 
 /**
+ * Listener notified when a session is deleted from the native session history.
+ */
+@protocol SessionDeleteListener <NSObject>
+
+/**
+ * Called after the session identified by sessionId has been deleted from
+ * session history.
+ *
+ * @param sessionId session identifier
+ */
+- (void)sessionDeleted:(long)sessionId;
+
+@end
+
+/**
  * <p>Configuration class of <code>FFmpegKit</code> library. Allows customizing
  * the global library options. Provides helper methods to support additional
  * resources.
@@ -147,7 +162,7 @@ typedef NS_ENUM(NSUInteger, Signal) {
  *
  * @return true/yes or false/no
  */
-+ (int)isLTSBuild __attribute__((deprecated("Deprecated as of version 6.1.2. Use AbiDetect.getMinSdk() method to determine the features supported by this version.")));
++ (int)isLTSBuild __attribute__((deprecated("Apple platform builds do not have an LTS build concept.")));
 
 /**
  * Returns FFmpegKit library build date.
@@ -414,6 +429,21 @@ typedef NS_ENUM(NSUInteger, Signal) {
  * @param sessionId session identifier
  */
 + (void)deleteSession:(long)sessionId;
+
+/**
+ * Adds a listener that is notified when sessions are deleted from session
+ * history. Listeners are held weakly.
+ *
+ * @param listener listener to add
+ */
++ (void)addSessionDeleteListener:(id<SessionDeleteListener>)listener;
+
+/**
+ * Removes a session delete listener.
+ *
+ * @param listener listener to remove
+ */
++ (void)removeSessionDeleteListener:(id<SessionDeleteListener>)listener;
 
 /**
  * Returns the last session created from the session history.

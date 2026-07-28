@@ -2,7 +2,7 @@
 
 source "${BASEDIR}/scripts/function.sh"
 
-prepare_inline_sed
+prepare_inline_sed || exit 1
 
 enable_default_android_architectures() {
   ENABLED_ARCHITECTURES[ARCH_ARM_V7A]=1
@@ -26,16 +26,20 @@ get_min_api_level_flag() {
   echo "-DFFMPEG_KIT_MIN_SDK=${API}"
 }
 
-enable_main_build() {
+set_default_min_android_platform_version() {
   export API=24
 }
 
-build_application_mk() {
+get_android_app_stl() {
   if [[ ${ENABLED_LIBRARIES[$LIBRARY_X265]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_VVENC]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_LIBSVTAV1]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_LIBJXL]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_TESSERACT]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_OPENH264]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_SNAPPY]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_RUBBERBAND]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_ZIMG]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_SRT]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_CHROMAPRINT]} -eq 1 ]] || [[ ${ENABLED_LIBRARIES[$LIBRARY_LIBILBC]} -eq 1 ]] || [[ -n ${CUSTOM_LIBRARY_USES_CPP} ]]; then
-    local APP_STL="c++_shared"
+    echo "c++_shared"
   else
-    local APP_STL="none"
+    echo "none"
   fi
+}
+
+build_application_mk() {
+  local APP_STL=$(get_android_app_stl)
 
   local BUILD_DATE="-DFFMPEG_KIT_BUILD_DATE=$(date +%Y%m%d 2>>"${BASEDIR}"/build.log)"
   if [[ -z ${NO_FFMPEG_KIT_PROTOCOLS} ]]; then
@@ -56,6 +60,8 @@ APP_STL := ${APP_STL}
 APP_ALLOW_MISSING_DEPS := true
 
 APP_PLATFORM := android-${API}
+
+FFMPEG_KIT_PACKAGE_NAME_CFLAG := $(get_package_name_cflag)
 
 APP_CFLAGS := -O3 -DANDROID ${MIN_API} ${BUILD_DATE} -Wall -Wno-deprecated-declarations -Wno-pointer-sign -Wno-switch -Wno-unused-result -Wno-unused-variable ${USES_FFMPEG_KIT_PROTOCOLS} ${FFMPEG_KIT_DEBUG} ${EXTRA_CFLAGS}
 
@@ -275,6 +281,9 @@ get_size_optimization_cflags() {
 get_app_specific_cflags() {
   local APP_FLAGS=""
   case $1 in
+  ffmpeg-kit)
+    APP_FLAGS="-std=c99 -Wno-unused-function $(get_package_name_cflag)"
+    ;;
   ffmpeg)
     APP_FLAGS="-Wno-unused-function -DBIONIC_IOCTL_NO_SIGNEDNESS_OVERLOAD"
     ;;
@@ -347,8 +356,8 @@ get_cxxflags() {
   fi
 
   case $1 in
-  gnutls)
-    echo "${COMMON_FLAGS} -std=c++11 -fno-rtti ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
+  ffmpeg-kit)
+    echo "${COMMON_FLAGS} -std=c++11 -fno-exceptions -fno-rtti ${OPTIMIZATION_FLAGS} $(get_package_name_cflag) ${EXTRA_CXXFLAGS}"
     ;;
   ffmpeg)
     if [[ -z ${FFMPEG_KIT_DEBUG} ]]; then
@@ -356,6 +365,9 @@ get_cxxflags() {
     else
       echo "${COMMON_FLAGS} -std=c++11 -fno-exceptions -fno-rtti ${FFMPEG_KIT_DEBUG} ${EXTRA_CXXFLAGS}"
     fi
+    ;;
+  gnutls)
+    echo "${COMMON_FLAGS} -std=c++11 -fno-rtti ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
     ;;
   opencore-amr)
     echo "${COMMON_FLAGS} ${OPTIMIZATION_FLAGS} ${EXTRA_CXXFLAGS}"
@@ -967,6 +979,152 @@ get_build_directory() {
 
 get_aar_directory() {
   echo "bundle-android-aar-${API}-maven"
+}
+
+get_prefab_module_dependencies() {
+  case $1 in
+  avutil | ffmpegkit_abidetect)
+    echo ""
+    ;;
+  swresample | swscale | avcodec)
+    echo "\":avutil\""
+    ;;
+  avformat)
+    echo "\":avcodec\", \":avutil\""
+    ;;
+  avfilter)
+    echo "\":avformat\", \":avcodec\", \":swscale\", \":swresample\", \":avutil\""
+    ;;
+  avdevice)
+    echo "\":avformat\", \":avfilter\", \":avcodec\", \":avutil\""
+    ;;
+  ffmpegkit)
+    echo "\":avformat\", \":avcodec\", \":avfilter\", \":avdevice\", \":swscale\", \":swresample\", \":avutil\""
+    ;;
+  esac
+}
+
+create_android_prefab_bundle() {
+  local AAR_PATH="$1"
+
+  echo -e "" 1>>"${BASEDIR}"/build.log 2>&1
+
+  if [[ ! -f "${AAR_PATH}" ]]; then
+    echo -e "ERROR: Can not create prefab bundle, AAR not found at ${AAR_PATH}\n" 1>>"${BASEDIR}"/build.log 2>&1
+    return 1
+  fi
+
+  local FFMPEG_KIT_VERSION=$(get_ffmpeg_kit_version)
+  local PREFAB_NDK_MAJOR=$(echo "${DETECTED_NDK_VERSION}" | head -n1 | cut -d. -f1 | tr -cd '0-9')
+  local PREFAB_STL=$(get_android_app_stl)
+  local LIBS_DIR="${BASEDIR}/android/libs"
+  local CPP_DIR="${BASEDIR}/android/ffmpeg-kit-next-android-lib/src/main/cpp"
+
+  # LOCATE AN ARCHITECTURE-INDEPENDENT FFMPEG HEADER TREE
+  local HEADER_INCLUDE=""
+  local candidate
+  for candidate in "${BASEDIR}"/prebuilt/android-arm64-* "${BASEDIR}"/prebuilt/android-arm-* "${BASEDIR}"/prebuilt/android-x86_64-* "${BASEDIR}"/prebuilt/android-x86-*; do
+    if [[ -d "${candidate}/ffmpeg/include/libavutil" ]]; then
+      HEADER_INCLUDE="${candidate}/ffmpeg/include"
+      break
+    fi
+  done
+  if [[ -z "${HEADER_INCLUDE}" ]]; then
+    echo -e "ERROR: Can not create prefab bundle, no FFmpeg header tree found under prebuilt\n" 1>>"${BASEDIR}"/build.log 2>&1
+    return 1
+  fi
+
+  # DISCOVER THE ABIS THAT WERE ACTUALLY BUILT
+  local ABIS=()
+  local abi_dir
+  for abi_dir in "${LIBS_DIR}"/*; do
+    [[ -d "${abi_dir}" ]] && ABIS+=("$(basename "${abi_dir}")")
+  done
+  if [[ ${#ABIS[@]} -eq 0 ]]; then
+    echo -e "ERROR: Can not create prefab bundle, no ABIs found under ${LIBS_DIR}\n" 1>>"${BASEDIR}"/build.log 2>&1
+    return 1
+  fi
+
+  # STAGE THE PREFAB TREE
+  local STAGING="${BASEDIR}/android/ffmpeg-kit-next-android-lib/build/prefab-staging"
+  local PREFAB_DIR="${STAGING}/prefab"
+  rm -rf "${STAGING}" 1>>"${BASEDIR}"/build.log 2>&1
+  mkdir -p "${PREFAB_DIR}/modules" 1>>"${BASEDIR}"/build.log 2>&1
+
+  # PACKAGE DESCRIPTOR
+  cat >"${PREFAB_DIR}/prefab.json" <<EOF
+{
+  "schema_version": 2,
+  "name": "ffmpeg-kit-next",
+  "version": "${FFMPEG_KIT_VERSION}",
+  "dependencies": []
+}
+EOF
+
+  # The exported modules. Each .so is android/libs/<abi>/lib<module>.so and each
+  # module's imported CMake target is ffmpeg-kit-next::<module>.
+  local MODULES=(avutil swresample swscale avcodec avformat avfilter avdevice ffmpegkit_abidetect ffmpegkit)
+  local module
+  for module in "${MODULES[@]}"; do
+    local MODULE_DIR="${PREFAB_DIR}/modules/${module}"
+    mkdir -p "${MODULE_DIR}/include" "${MODULE_DIR}/libs" 1>>"${BASEDIR}"/build.log 2>&1
+
+    # MODULE DESCRIPTOR
+    local DEPS=$(get_prefab_module_dependencies "${module}")
+    cat >"${MODULE_DIR}/module.json" <<EOF
+{
+  "export_libraries": [${DEPS}],
+  "library_name": "lib${module}"
+}
+EOF
+
+    # MODULE HEADERS (ABI-INDEPENDENT)
+    case ${module} in
+    ffmpegkit)
+      cp "${CPP_DIR}/ffmpegkit.h" "${CPP_DIR}/ffprobekit.h" "${MODULE_DIR}/include/" 1>>"${BASEDIR}"/build.log 2>&1
+      ;;
+    ffmpegkit_abidetect)
+      cp "${CPP_DIR}/ffmpegkit_abidetect.h" "${MODULE_DIR}/include/" 1>>"${BASEDIR}"/build.log 2>&1
+      ;;
+    *)
+      cp -r "${HEADER_INCLUDE}/lib${module}" "${MODULE_DIR}/include/" 1>>"${BASEDIR}"/build.log 2>&1
+      ;;
+    esac
+
+    # PER-ABI LIBRARY + ABI DESCRIPTOR
+    local abi
+    for abi in "${ABIS[@]}"; do
+      local SO_FILE="${LIBS_DIR}/${abi}/lib${module}.so"
+      if [[ ! -f "${SO_FILE}" ]]; then
+        echo -e "ERROR: Missing ${SO_FILE} while creating prefab bundle\n" 1>>"${BASEDIR}"/build.log 2>&1
+        return 1
+      fi
+
+      local ABI_LIB_DIR="${MODULE_DIR}/libs/android.${abi}"
+      mkdir -p "${ABI_LIB_DIR}" 1>>"${BASEDIR}"/build.log 2>&1
+      cp "${SO_FILE}" "${ABI_LIB_DIR}/" 1>>"${BASEDIR}"/build.log 2>&1
+
+      cat >"${ABI_LIB_DIR}/abi.json" <<EOF
+{
+  "abi": "${abi}",
+  "api": ${API},
+  "ndk": ${PREFAB_NDK_MAJOR},
+  "stl": "${PREFAB_STL}",
+  "static": false
+}
+EOF
+    done
+  done
+
+  # INJECT THE PREFAB TREE INTO THE AAR (AARs are plain zip archives)
+  (cd "${STAGING}" && zip -r -X -q "${AAR_PATH}" prefab) 1>>"${BASEDIR}"/build.log 2>&1
+  if [ $? -ne 0 ]; then
+    echo -e "ERROR: Failed to inject prefab payload into ${AAR_PATH}\n" 1>>"${BASEDIR}"/build.log 2>&1
+    return 1
+  fi
+
+  echo -e "DEBUG: Injected prefab payload (${#ABIS[@]} ABIs, ${#MODULES[@]} modules) into $(basename "${AAR_PATH}") successfully\n" 1>>"${BASEDIR}"/build.log 2>&1
+  return 0
 }
 
 android_ndk_cmake() {

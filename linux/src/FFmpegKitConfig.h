@@ -25,7 +25,7 @@
 #include "Level.h"
 #include "LogCallback.h"
 #include "MediaInformationSession.h"
-#include "Signal.h"
+#include "SessionDeleteListener.h"
 #include "StatisticsCallback.h"
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +38,14 @@
 
 namespace ffmpegkit {
 
+enum Signal {
+    SignalInt = 2,
+    SignalQuit = 3,
+    SignalPipe = 13,
+    SignalTerm = 15,
+    SignalXcpu = 24
+};
+
 /**
  * <p>Configuration class of <code>FFmpegKit</code> library. Allows customizing
  * the global library options. Provides helper methods to support additional
@@ -46,7 +54,7 @@ namespace ffmpegkit {
 class FFmpegKitConfig {
   public:
     /** Global library version */
-    static constexpr const char *FFmpegKitVersion = "8.1.0";
+    static constexpr const char *FFmpegKitVersion = "8.1.1";
 
     /**
      * Prefix of named pipes created by ffmpeg-kit.
@@ -186,9 +194,11 @@ class FFmpegKitConfig {
     /**
      * <p>Returns whether FFmpegKit release is a Long Term Release or not.
      *
+     * @deprecated Deprecated. Linux builds do not have an LTS build concept.
      * @return true/yes or false/no
      */
-    static bool isLTSBuild();
+    static bool isLTSBuild()
+        __attribute__((deprecated("Deprecated. Linux builds do not have an LTS build concept.")));
 
     /**
      * Returns FFmpegKit library build date.
@@ -416,6 +426,23 @@ class FFmpegKitConfig {
      * @param sessionId session identifier
      */
     static void deleteSession(const long sessionId);
+
+    /**
+     * Adds a listener that is notified when sessions are deleted from session
+     * history. Listeners are held weakly.
+     *
+     * @param listener listener to add
+     */
+    static void addSessionDeleteListener(
+        const std::shared_ptr<ffmpegkit::SessionDeleteListener> listener);
+
+    /**
+     * Removes a session delete listener.
+     *
+     * @param listener listener to remove
+     */
+    static void removeSessionDeleteListener(
+        const std::shared_ptr<ffmpegkit::SessionDeleteListener> listener);
 
     /**
      * Returns the last session created from the session history.

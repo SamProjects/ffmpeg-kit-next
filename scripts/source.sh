@@ -206,6 +206,11 @@ get_library_source() {
     SOURCE_ID="v1.5.2"
     SOURCE_TYPE="TAG"
     ;;
+  rapidjson)
+    SOURCE_REPO_URL="https://github.com/arthenica/rapidjson"
+    SOURCE_ID="24b5e7a8b27f42fa16b96fc70aade9106cf7102f"
+    SOURCE_TYPE="COMMIT"
+    ;;
   rubberband)
     SOURCE_REPO_URL="https://github.com/arthenica/rubberband"
     SOURCE_ID="v4.0.0"
@@ -268,7 +273,7 @@ get_library_source() {
     ;;
   x264)
     SOURCE_REPO_URL="https://github.com/arthenica/x264"
-    SOURCE_ID="55d517bc4569272a2c9a367a4106c234aba2ffbc"
+    SOURCE_ID="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"
     SOURCE_TYPE="COMMIT"
     ;;
   x265)

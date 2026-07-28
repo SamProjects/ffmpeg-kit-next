@@ -23,10 +23,10 @@ disabled_libraries=()
 # SET DEFAULT SETTINGS
 enable_default_android_architectures
 enable_default_android_libraries
-enable_main_build
+set_default_min_android_platform_version
 
 # DETECT ANDROID NDK VERSION
-export DETECTED_NDK_VERSION=$(grep -Eo "Revision.*" "${ANDROID_NDK_ROOT}"/source.properties | sed 's/Revision//g;s/=//g;s/ //g')
+export DETECTED_NDK_VERSION=$(grep -E "^Pkg\.Revision[[:space:]]*=" "${ANDROID_NDK_ROOT}"/source.properties | head -1 | sed 's/^.*=[[:space:]]*//')
 echo -e "\nINFO: Using Android NDK v${DETECTED_NDK_VERSION} provided at ${ANDROID_NDK_ROOT}\n" 1>>"${BASEDIR}"/build.log 2>&1
 echo -e "INFO: Build options: $*\n" 1>>"${BASEDIR}"/build.log 2>&1
 
@@ -55,6 +55,9 @@ while [ ! $# -eq 0 ]; do
     ;;
   --no-archive)
     NO_ARCHIVE="1"
+    ;;
+  --prefab)
+    export BUILD_PREFAB="1"
     ;;
   --no-output-redirection)
     no_output_redirection
@@ -132,6 +135,11 @@ while [ ! $# -eq 0 ]; do
     ;;
   --no-ffmpeg-kit-protocols)
     export NO_FFMPEG_KIT_PROTOCOLS="1"
+    ;;
+  --package-name=*)
+    PACKAGE_NAME="${1#--package-name=}"
+
+    export FFMPEG_KIT_PACKAGE_NAME="${PACKAGE_NAME}"
     ;;
   --toolchain=*)
     ANDROID_TOOLCHAIN="${1#--toolchain=}"
@@ -400,10 +408,19 @@ if [[ -n ${ANDROID_ARCHITECTURES} ]]; then
     echo -e -n "\nCreating Android archive under prebuilt: "
 
     # BUILD ANDROID ARCHIVE
+    export JAVA_TOOL_OPTIONS="''${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.language=en -Duser.country=US"
     rm -f "${BASEDIR}"/android/ffmpeg-kit-next-android-lib/build/outputs/aar/ffmpeg-kit-next-release.aar 1>>"${BASEDIR}"/build.log 2>&1
     ./gradlew ffmpeg-kit-next-android-lib:clean ffmpeg-kit-next-android-lib:assembleRelease ffmpeg-kit-next-android-lib:testReleaseUnitTest 1>>"${BASEDIR}"/build.log 2>&1
     if [ $? -ne 0 ]; then
       exit 1
+    fi
+
+    # OPTIONALLY INJECT PREFAB PAYLOAD SO NATIVE/CMAKE CONSUMERS CAN find_package(ffmpeg-kit-next)
+    if [[ -n ${BUILD_PREFAB} ]]; then
+      create_android_prefab_bundle "${BASEDIR}"/android/ffmpeg-kit-next-android-lib/build/outputs/aar/ffmpeg-kit-next-release.aar
+      if [ $? -ne 0 ]; then
+        exit 1
+      fi
     fi
 
     # COPY ANDROID ARCHIVE INTO A LOCAL MAVEN REPOSITORY UNDER PREBUILT
@@ -445,7 +462,7 @@ EOF
       exit 1
     fi
 
-    echo -e "INFO: Created ffmpeg-kit Android archive successfully.\n" 1>>"${BASEDIR}"/build.log 2>&1
+    echo -e "\nINFO: Created ffmpeg-kit Android archive successfully.\n" 1>>"${BASEDIR}"/build.log 2>&1
     echo -e "ok\n"
   else
     echo -e "INFO: Skipped creating Android archive.\n" 1>>"${BASEDIR}"/build.log 2>&1

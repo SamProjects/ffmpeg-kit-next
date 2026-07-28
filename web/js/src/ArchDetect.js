@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2026 Taner Sener
+ * Copyright (c) 2026 Taner Sener
  *
  * This file is part of FFmpegKitNext.
  *
@@ -17,19 +17,18 @@
  * along with FFmpegKitNext. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef FFMPEG_KIT_SIGNAL_H
-#define FFMPEG_KIT_SIGNAL_H
+import {getFactory} from './FFmpegKitFactory.js';
 
-namespace ffmpegkit {
-
-enum Signal {
-    SignalInt = 2,
-    SignalQuit = 3,
-    SignalPipe = 13,
-    SignalTerm = 15,
-    SignalXcpu = 24
-};
-
+/**
+ * Detects the running architecture.
+ */
+export class ArchDetect {
+    /**
+     * Returns architecture name loaded.
+     *
+     * @returns {Promise<string>} architecture name loaded
+     */
+    static async getArch() {
+        return getFactory().getArch();
+    }
 }
-
-#endif // FFMPEG_KIT_SIGNAL_H
