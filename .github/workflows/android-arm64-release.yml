@@ -1,0 +1,249 @@
+name: Build Android ARM64 and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, for example v8.1.1 or v8.1.1-arm64"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-arm64-release-${{ github.ref }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Android arm64-v8a
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      artifact_version: ${{ steps.release_context.outputs.artifact_version }}
+      release_tag: ${{ steps.release_context.outputs.release_tag }}
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release information
+        id: release_context
+        env:
+          MANUAL_RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact_version="$(
+            sed -n 's/^#define FFMPEG_KIT_VERSION "\([^"]*\)"/\1/p' \
+              android/ffmpeg-kit-next-android-lib/src/main/cpp/ffmpegkit.h
+          )"
+
+          if [[ -z "$artifact_version" ]]; then
+            echo "::error::Could not read FFMPEG_KIT_VERSION from ffmpegkit.h."
+            exit 1
+          fi
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            release_tag="$MANUAL_RELEASE_TAG"
+          fi
+
+          if [[ ! "$release_tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::Release tag must start with v and contain only letters, numbers, dot, underscore, or dash."
+            exit 1
+          fi
+
+          if [[ "$release_tag" != "v${artifact_version}" && "$release_tag" != "v${artifact_version}-"* ]]; then
+            echo "::error::Release tag ${release_tag} does not match source version ${artifact_version}."
+            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}-arm64."
+            exit 1
+          fi
+
+          echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Build the ARM64-only Android AAR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./nix-android.sh -p android-r27d \
+            --disable-arm-v7a \
+            --disable-arm-v7a-neon \
+            --disable-x86 \
+            --disable-x86-64
+
+      - name: Verify ABI and Android 16 page-size compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t aar_files < <(
+            find prebuilt -type f -path "*/bundle-android-aar-*-maven/*" -name "*.aar" -print
+          )
+
+          if (( ${#aar_files[@]} != 1 )); then
+            echo "::error::Expected exactly one generated AAR; found ${#aar_files[@]}."
+            printf '%s\n' "${aar_files[@]}"
+            exit 1
+          fi
+
+          aar="${aar_files[0]}"
+          mapfile -t packaged_abis < <(
+            unzip -Z1 "$aar" |
+              sed -n 's#^jni/\([^/]*\)/.*\.so$#\1#p' |
+              sort -u
+          )
+
+          if (( ${#packaged_abis[@]} != 1 )) || [[ "${packaged_abis[0]:-}" != "arm64-v8a" ]]; then
+            echo "::error::AAR must contain only arm64-v8a; found: ${packaged_abis[*]:-none}."
+            exit 1
+          fi
+
+          verify_dir="$RUNNER_TEMP/ffmpeg-kit-aar"
+          mkdir -p "$verify_dir"
+          unzip -qq "$aar" "jni/arm64-v8a/*.so" -d "$verify_dir"
+
+          for library in "$verify_dir"/jni/arm64-v8a/*.so; do
+            mapfile -t load_alignments < <(
+              readelf -lW "$library" | awk '$1 == "LOAD" { print $NF }'
+            )
+
+            if (( ${#load_alignments[@]} == 0 )); then
+              echo "::error::No ELF LOAD segments found in $library."
+              exit 1
+            fi
+
+            for alignment in "${load_alignments[@]}"; do
+              if (( alignment < 0x4000 )); then
+                echo "::error::$library has LOAD alignment $alignment; Android 16 ARM64 requires 0x4000 compatibility."
+                exit 1
+              fi
+            done
+          done
+
+          echo "Verified ABI: arm64-v8a"
+          echo "Verified ELF LOAD alignment: at least 16 KiB (0x4000)"
+
+      - name: Package release assets
+        env:
+          ARTIFACT_VERSION: ${{ steps.release_context.outputs.artifact_version }}
+          RELEASE_TAG: ${{ steps.release_context.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t maven_repositories < <(
+            find prebuilt -mindepth 1 -maxdepth 1 -type d -name "bundle-android-aar-*-maven" -print
+          )
+
+          if (( ${#maven_repositories[@]} != 1 )); then
+            echo "::error::Expected exactly one generated Maven repository; found ${#maven_repositories[@]}."
+            exit 1
+          fi
+
+          maven_repository="${maven_repositories[0]}"
+          source_aar="$(
+            find "$maven_repository" -type f -name "ffmpeg-kit-next-${ARTIFACT_VERSION}.aar" -print -quit
+          )"
+          source_pom="$(
+            find "$maven_repository" -type f -name "ffmpeg-kit-next-${ARTIFACT_VERSION}.pom" -print -quit
+          )"
+
+          if [[ -z "$source_aar" || -z "$source_pom" ]]; then
+            echo "::error::Generated AAR or POM is missing from $maven_repository."
+            exit 1
+          fi
+
+          mkdir -p dist
+          aar_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-arm64-v8a.aar"
+          pom_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-arm64-v8a.pom"
+          maven_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-arm64-v8a-maven.tar.gz"
+
+          cp "$source_aar" "dist/$aar_asset"
+          cp "$source_pom" "dist/$pom_asset"
+          tar -C "$maven_repository" -czf "dist/$maven_asset" .
+
+          {
+            echo "FFmpegKitNext version: $ARTIFACT_VERSION"
+            echo "Release tag: $RELEASE_TAG"
+            echo "Git commit: $GITHUB_SHA"
+            echo "Android ABI: arm64-v8a"
+            echo "Minimum Android API: 24"
+            echo "Test target: Android 16 / 16 KiB page compatible"
+            echo "License profile: LGPL v3 (default build; GPL libraries are not enabled)"
+          } > dist/BUILD-INFO.txt
+
+          (
+            cd dist
+            sha256sum \
+              "$aar_asset" \
+              "$pom_asset" \
+              "$maven_asset" \
+              BUILD-INFO.txt > SHA256SUMS
+          )
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-kit-next-${{ steps.release_context.outputs.artifact_version }}-android-arm64-v8a
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-arm64-build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-kit-next-${{ needs.build.outputs.artifact_version }}-android-arm64-v8a
+          path: dist
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          ARTIFACT_VERSION: ${{ needs.build.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "FFmpegKitNext ${ARTIFACT_VERSION} for Android ARM64" \
+              --generate-notes \
+              --notes "ARM64-only Android build (arm64-v8a), minSdk 24. Suitable for Xiaomi 14 / Snapdragon 8 Gen 3 on Android 16. Native libraries are verified for 16 KiB page-size compatibility."
+          fi
