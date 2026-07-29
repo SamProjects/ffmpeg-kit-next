@@ -1,0 +1,572 @@
+name: Build All Platforms and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, for example v8.1.1 or v8.1.1-all"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: all-platform-release-${{ github.ref }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact_version: ${{ steps.release_context.outputs.artifact_version }}
+      release_tag: ${{ steps.release_context.outputs.release_tag }}
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and verify release information
+        id: release_context
+        env:
+          MANUAL_RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          android_version="$(
+            sed -n 's/^#define FFMPEG_KIT_VERSION "\([^"]*\)"/\1/p' \
+              android/ffmpeg-kit-next-android-lib/src/main/cpp/ffmpegkit.h
+          )"
+          apple_version="$(
+            sed -n 's/.*const FFmpegKitVersion.*@"\([^"]*\)".*/\1/p' \
+              apple/src/FFmpegKitConfig.m
+          )"
+          linux_version="$(
+            sed -n 's/.*FFmpegKitVersion = "\([^"]*\)".*/\1/p' \
+              linux/src/FFmpegKitConfig.h
+          )"
+          web_version="$(
+            sed -n 's/.*FFmpegKitVersion = "\([^"]*\)".*/\1/p' \
+              web/src/FFmpegKitConfig.h
+          )"
+
+          artifact_version="$android_version"
+          for platform_version in "$apple_version" "$linux_version" "$web_version"; do
+            if [[ -z "$artifact_version" || "$platform_version" != "$artifact_version" ]]; then
+              echo "::error::Platform source versions do not match."
+              echo "::error::Android=$android_version Apple=$apple_version Linux=$linux_version Web=$web_version"
+              exit 1
+            fi
+          done
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            release_tag="$MANUAL_RELEASE_TAG"
+          fi
+
+          if [[ ! "$release_tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::Release tag must start with v and contain only letters, numbers, dot, underscore, or dash."
+            exit 1
+          fi
+
+          if [[ "$release_tag" != "v${artifact_version}" && "$release_tag" != "v${artifact_version}-"* ]]; then
+            echo "::error::Release tag ${release_tag} does not match source version ${artifact_version}."
+            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}-all."
+            exit 1
+          fi
+
+          echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+  build_android:
+    name: Android (all ABIs)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Build Android AAR and Prefab package
+        shell: bash
+        run: ./nix-android.sh -p android-r27d --prefab
+
+      - name: Verify and package Android assets
+        env:
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          maven_repository="prebuilt/bundle-android-aar-24-maven"
+          source_aar="$maven_repository/com/arthenica/ffmpeg-kit-next/$ARTIFACT_VERSION/ffmpeg-kit-next-$ARTIFACT_VERSION.aar"
+          source_pom="$maven_repository/com/arthenica/ffmpeg-kit-next/$ARTIFACT_VERSION/ffmpeg-kit-next-$ARTIFACT_VERSION.pom"
+
+          test -f "$source_aar"
+          test -f "$source_pom"
+
+          packaged_abis="$(
+            unzip -Z1 "$source_aar" |
+              sed -n 's#^jni/\([^/]*\)/.*\.so$#\1#p' |
+              sort -u
+          )"
+
+          for expected_abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            if ! grep -Fxq "$expected_abi" <<< "$packaged_abis"; then
+              echo "::error::Android AAR is missing ABI $expected_abi."
+              exit 1
+            fi
+          done
+
+          verify_dir="$RUNNER_TEMP/ffmpeg-kit-aar"
+          mkdir -p "$verify_dir"
+          unzip -qq "$source_aar" "jni/arm64-v8a/*.so" -d "$verify_dir"
+
+          for library in "$verify_dir"/jni/arm64-v8a/*.so; do
+            while read -r alignment; do
+              if (( alignment < 0x4000 )); then
+                echo "::error::$library has LOAD alignment $alignment; expected at least 0x4000."
+                exit 1
+              fi
+            done < <(readelf -lW "$library" | awk '$1 == "LOAD" { print $NF }')
+          done
+
+          mkdir -p release-dist
+          aar_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-all-abis.aar"
+          pom_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-all-abis.pom"
+          maven_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-maven.tar.gz"
+
+          cp "$source_aar" "release-dist/$aar_asset"
+          cp "$source_pom" "release-dist/$pom_asset"
+          tar -C "$maven_repository" -czf "release-dist/$maven_asset" .
+
+          {
+            echo "Platform: Android"
+            echo "Version: $ARTIFACT_VERSION"
+            echo "ABIs: armeabi-v7a, arm64-v8a, x86, x86_64"
+            echo "Minimum API: 24"
+            echo "Prefab: enabled"
+            echo "ARM64 16 KiB ELF alignment: verified"
+          } > release-dist/BUILD-INFO-android.txt
+
+      - name: Upload Android release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-android
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Android build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-android
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build_linux:
+    name: Linux (${{ matrix.arch }})
+    needs: prepare
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Build Linux bundle
+        shell: bash
+        run: ./nix-linux.sh -p default
+
+      - name: Package Linux bundle
+        env:
+          ARCH: ${{ matrix.arch }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_root="prebuilt/bundle-linux"
+          test -d "$bundle_root/ffmpeg-kit-next"
+
+          mkdir -p release-dist
+          asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-linux-${ARCH}.tar.gz"
+          tar -C "$bundle_root" -czf "release-dist/$asset" ffmpeg-kit-next
+
+          {
+            echo "Platform: Linux"
+            echo "Version: $ARTIFACT_VERSION"
+            echo "Architecture: $ARCH"
+            echo "Runner architecture: $(uname -m)"
+          } > "release-dist/BUILD-INFO-linux-${ARCH}.txt"
+
+      - name: Upload Linux release asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Linux build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-linux-${{ matrix.arch }}
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build_web:
+    name: WebAssembly
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Build WebAssembly package
+        shell: bash
+        run: ./nix-web.sh -p web-wasm32-emscripten
+
+      - name: Create installable npm package
+        env:
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_root="prebuilt/bundle-web-wasm32/ffmpeg-kit-next"
+          test -f "$package_root/package.json"
+          test -f "$package_root/lib/libffmpegkit.wasm"
+
+          mkdir -p release-dist
+          packed_name="$(npm pack "$package_root" --pack-destination release-dist)"
+          asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-web-wasm32.tgz"
+          mv "release-dist/$packed_name" "release-dist/$asset"
+
+          {
+            echo "Platform: Web"
+            echo "Version: $ARTIFACT_VERSION"
+            echo "Architecture: wasm32"
+            echo "Linkage: dynamic"
+            echo "Package format: npm"
+          } > release-dist/BUILD-INFO-web.txt
+
+      - name: Upload Web release asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-web
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Web build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-web
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build_apple:
+    name: Apple (${{ matrix.platform }})
+    needs: prepare
+    runs-on: macos-26-intel
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ios
+            wrapper: nix-ios.sh
+          - platform: macos
+            wrapper: nix-macos.sh
+          - platform: tvos
+            wrapper: nix-tvos.sh
+          - platform: visionos
+            wrapper: nix-visionos.sh
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Build XCFrameworks and Swift package
+        env:
+          WRAPPER: ${{ matrix.wrapper }}
+        shell: bash
+        run: ./"$WRAPPER" -p xcode26 -x --spm
+
+      - name: Package Apple platform
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_dirs=()
+          while IFS= read -r directory; do
+            bundle_dirs+=("$directory")
+          done < <(
+            find prebuilt -mindepth 1 -maxdepth 1 -type d \
+              -name "bundle-apple-xcframework-${PLATFORM}-*" -print
+          )
+
+          if (( ${#bundle_dirs[@]} != 1 )); then
+            echo "::error::Expected one $PLATFORM XCFramework bundle; found ${#bundle_dirs[@]}."
+            exit 1
+          fi
+
+          bundle="${bundle_dirs[0]}"
+          test -f "$bundle/Package.swift"
+          if ! find "$bundle" -mindepth 1 -maxdepth 1 -type d -name "*.xcframework" | grep -q .; then
+            echo "::error::No XCFrameworks found in $bundle."
+            exit 1
+          fi
+
+          mkdir -p release-dist framework-staging
+          asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-apple-${PLATFORM}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$bundle" "release-dist/$asset"
+
+          {
+            echo "Platform: Apple $PLATFORM"
+            echo "Version: $ARTIFACT_VERSION"
+            echo "Format: XCFramework + local Swift package"
+            xcodebuild -version
+          } > "release-dist/BUILD-INFO-apple-${PLATFORM}.txt"
+
+          framework_names=()
+          while IFS= read -r directory; do
+            framework_names+=("$(basename "$directory")")
+          done < <(
+            find prebuilt -mindepth 1 -maxdepth 1 -type d \
+              -name "bundle-apple-framework-*" -print
+          )
+
+          if (( ${#framework_names[@]} == 0 )); then
+            echo "::error::No intermediate Apple frameworks found for umbrella packaging."
+            exit 1
+          fi
+
+          tar -C prebuilt -cf "framework-staging/apple-frameworks-${PLATFORM}.tar" \
+            "${framework_names[@]}"
+
+      - name: Upload Apple release asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-apple-${{ matrix.platform }}
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload frameworks for umbrella package
+        uses: actions/upload-artifact@v7
+        with:
+          name: apple-frameworks-${{ matrix.platform }}
+          path: framework-staging/*.tar
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Apple build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-apple-${{ matrix.platform }}
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build_apple_umbrella:
+    name: Apple universal Swift package
+    needs:
+      - prepare
+      - build_apple
+    runs-on: macos-26-intel
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download platform frameworks
+        uses: actions/download-artifact@v8
+        with:
+          pattern: apple-frameworks-*
+          path: framework-staging
+          merge-multiple: true
+
+      - name: Restore platform frameworks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p prebuilt
+          archive_count=0
+          for archive in framework-staging/*.tar; do
+            test -f "$archive"
+            tar -C prebuilt -xf "$archive"
+            archive_count=$((archive_count + 1))
+          done
+
+          if (( archive_count != 4 )); then
+            echo "::error::Expected four Apple framework archives; found $archive_count."
+            exit 1
+          fi
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Create umbrella XCFrameworks and Swift package
+        shell: bash
+        run: ./nix-apple.sh -p xcode26 --spm
+
+      - name: Package universal Apple bundle
+        env:
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_dirs=()
+          while IFS= read -r directory; do
+            bundle_dirs+=("$directory")
+          done < <(
+            find prebuilt -mindepth 1 -maxdepth 1 -type d \
+              -name "umbrella-apple-xcframework-*" -print
+          )
+
+          if (( ${#bundle_dirs[@]} != 1 )); then
+            echo "::error::Expected one umbrella Apple bundle; found ${#bundle_dirs[@]}."
+            exit 1
+          fi
+
+          bundle="${bundle_dirs[0]}"
+          test -f "$bundle/Package.swift"
+
+          mkdir -p release-dist
+          asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-apple-universal.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$bundle" "release-dist/$asset"
+
+          {
+            echo "Platforms: iOS, iPadOS, Mac Catalyst, macOS, tvOS, visionOS"
+            echo "Version: $ARTIFACT_VERSION"
+            echo "Format: umbrella XCFrameworks + local Swift package"
+            xcodebuild -version
+          } > release-dist/BUILD-INFO-apple-universal.txt
+
+      - name: Upload universal Apple release asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-apple-universal
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload umbrella build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-apple-universal
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - build_android
+      - build_linux
+      - build_web
+      - build_apple
+      - build_apple_umbrella
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all release assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' |
+              sort -z |
+              xargs -0 sha256sum > SHA256SUMS
+          )
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "FFmpegKitNext ${ARTIFACT_VERSION}" \
+              --generate-notes \
+              --notes "Prebuilt LGPL artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Android includes all supported ABIs and Prefab metadata; Apple includes platform-specific and universal Swift packages."
+          fi
