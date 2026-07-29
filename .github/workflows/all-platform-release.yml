@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, for example v8.1.1 or v8.1.1-all"
+        description: "Release tag, for example v8.1.1, v8.1.1-all, or v8.1.1_2"
         required: true
         type: string
 
@@ -77,9 +77,11 @@ jobs:
             exit 1
           fi
 
-          if [[ "$release_tag" != "v${artifact_version}" && "$release_tag" != "v${artifact_version}-"* ]]; then
+          if [[ "$release_tag" != "v${artifact_version}" &&
+                "$release_tag" != "v${artifact_version}-"* &&
+                "$release_tag" != "v${artifact_version}_"* ]]; then
             echo "::error::Release tag ${release_tag} does not match source version ${artifact_version}."
-            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}-all."
+            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}-all or v${artifact_version}_2."
             exit 1
           fi
 
@@ -309,7 +311,9 @@ jobs:
   build_apple:
     name: Apple (${{ matrix.platform }})
     needs: prepare
-    runs-on: macos-26-intel
+    # Determinate Nix no longer supports Intel macOS hosts. Apple Silicon
+    # still cross-compiles the x86_64 slices included in the XCFrameworks.
+    runs-on: macos-26
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -330,8 +334,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify Apple Silicon and Xcode SDKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk appletvos --show-sdk-version
+          xcrun --sdk xros --show-sdk-version
+
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.21.8
+        with:
+          kvm: false
 
       - name: Build XCFrameworks and Swift package
         env:
@@ -424,7 +440,7 @@ jobs:
     needs:
       - prepare
       - build_apple
-    runs-on: macos-26-intel
+    runs-on: macos-26
     timeout-minutes: 120
 
     steps:
@@ -458,8 +474,20 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Apple Silicon and Xcode SDKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk appletvos --show-sdk-version
+          xcrun --sdk xros --show-sdk-version
+
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.21.8
+        with:
+          kvm: false
 
       - name: Create umbrella XCFrameworks and Swift package
         shell: bash
