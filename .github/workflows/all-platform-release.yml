@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, for example v8.1.1, v8.1.1-all, or v8.1.1_2"
+        description: "Release tag, for example v8.1.1 or v8.1.1_2"
         required: true
         type: string
 
@@ -81,7 +81,7 @@ jobs:
                 "$release_tag" != "v${artifact_version}-"* &&
                 "$release_tag" != "v${artifact_version}_"* ]]; then
             echo "::error::Release tag ${release_tag} does not match source version ${artifact_version}."
-            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}-all or v${artifact_version}_2."
+            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}_2."
             exit 1
           fi
 
@@ -89,16 +89,29 @@ jobs:
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
   build_android:
-    name: Android (${{ matrix.variant }})
+    name: Android (${{ matrix.target }})
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        variant:
-          - all
-          - lite
+        include:
+          - target: arm-v7a
+            suffix: android-armeabi-v7a
+            archive_abi: armeabi-v7a
+          - target: arm-v7a-neon
+            suffix: android-armeabi-v7a-neon
+            archive_abi: armeabi-v7a
+          - target: arm64-v8a
+            suffix: android-arm64-v8a
+            archive_abi: arm64-v8a
+          - target: x86
+            suffix: android-x86
+            archive_abi: x86
+          - target: x86-64
+            suffix: android-x86_64
+            archive_abi: x86_64
 
     steps:
       - name: Check out source and tags
@@ -109,30 +122,69 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.21.8
 
-      - name: Build Android ${{ matrix.variant }} package
+      - name: Restore and save Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          use-flakehub: false
+
+      - name: Build Android ${{ matrix.target }} package
         env:
-          VARIANT: ${{ matrix.variant }}
+          TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "$VARIANT" == "all" ]]; then
-            ./nix-android.sh -p android-r27d --prefab
-          else
-            # Lite is architecture-lite, not feature-lite. Keep FFmpeg's built-in
-            # demuxers, muxers, parsers, bitstream filters and protocols for
-            # broad stream-copy (-c copy) support.
-            ./nix-android.sh -p android-r27d \
-              --disable-arm-v7a \
-              --disable-arm-v7a-neon \
-              --disable-x86 \
-              --disable-x86-64
-          fi
+          # Each release package contains one architecture. FFmpeg's built-in
+          # demuxers, muxers, parsers, bitstream filters and protocols remain
+          # enabled for broad stream-copy (-c copy) support.
+          case "$TARGET" in
+            arm-v7a)
+              ./nix-android.sh -p android-r27d \
+                --disable-arm-v7a-neon \
+                --disable-arm64-v8a \
+                --disable-x86 \
+                --disable-x86-64
+              ;;
+            arm-v7a-neon)
+              ./nix-android.sh -p android-r27d \
+                --disable-arm-v7a \
+                --disable-arm64-v8a \
+                --disable-x86 \
+                --disable-x86-64
+              ;;
+            arm64-v8a)
+              ./nix-android.sh -p android-r27d \
+                --disable-arm-v7a \
+                --disable-arm-v7a-neon \
+                --disable-x86 \
+                --disable-x86-64
+              ;;
+            x86)
+              ./nix-android.sh -p android-r27d \
+                --disable-arm-v7a \
+                --disable-arm-v7a-neon \
+                --disable-arm64-v8a \
+                --disable-x86-64
+              ;;
+            x86-64)
+              ./nix-android.sh -p android-r27d \
+                --disable-arm-v7a \
+                --disable-arm-v7a-neon \
+                --disable-arm64-v8a \
+                --disable-x86
+              ;;
+            *)
+              echo "::error::Unknown Android target: $TARGET"
+              exit 1
+              ;;
+          esac
 
       - name: Verify and package Android assets
         env:
           ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
-          VARIANT: ${{ matrix.variant }}
+          TARGET: ${{ matrix.target }}
+          ASSET_SUFFIX: ${{ matrix.suffix }}
+          EXPECTED_ABI: ${{ matrix.archive_abi }}
         shell: bash
         run: |
           set -euo pipefail
@@ -151,51 +203,37 @@ jobs:
               sort -u
           )"
 
-          if [[ "$VARIANT" == "all" ]]; then
-            for expected_abi in armeabi-v7a arm64-v8a x86 x86_64; do
-              if ! grep -Fxq "$expected_abi" <<< "$packaged_abis"; then
-                echo "::error::Android all AAR is missing ABI $expected_abi."
-                exit 1
-              fi
-            done
-
-            if ! grep -Fxq "prefab/prefab.json" <<< "$archive_entries"; then
-              echo "::error::Android all AAR is missing Prefab metadata."
-              exit 1
-            fi
-            abi_description="armeabi-v7a, arm64-v8a, x86, x86_64"
-            prefab_description="enabled"
-          else
-            if [[ "$packaged_abis" != "arm64-v8a" ]]; then
-              echo "::error::Android lite AAR must contain only arm64-v8a; found: $packaged_abis"
-              exit 1
-            fi
-
-            if grep -q "^prefab/" <<< "$archive_entries"; then
-              echo "::error::Android lite AAR unexpectedly contains Prefab metadata."
-              exit 1
-            fi
-            abi_description="arm64-v8a only"
-            prefab_description="disabled"
+          if [[ "$packaged_abis" != "$EXPECTED_ABI" ]]; then
+            echo "::error::Android $TARGET AAR must contain only $EXPECTED_ABI; found: $packaged_abis"
+            exit 1
           fi
 
-          verify_dir="$RUNNER_TEMP/ffmpeg-kit-aar"
-          mkdir -p "$verify_dir"
-          unzip -qq "$source_aar" "jni/arm64-v8a/*.so" -d "$verify_dir"
+          if grep -q "^prefab/" <<< "$archive_entries"; then
+            echo "::error::Android $TARGET AAR unexpectedly contains Prefab metadata."
+            exit 1
+          fi
 
-          for library in "$verify_dir"/jni/arm64-v8a/*.so; do
-            while read -r alignment; do
-              if (( alignment < 0x4000 )); then
-                echo "::error::$library has LOAD alignment $alignment; expected at least 0x4000."
-                exit 1
-              fi
-            done < <(readelf -lW "$library" | awk '$1 == "LOAD" { print $NF }')
-          done
+          alignment_description="not applicable"
+          if [[ "$EXPECTED_ABI" == "arm64-v8a" ]]; then
+            verify_dir="$RUNNER_TEMP/ffmpeg-kit-aar"
+            mkdir -p "$verify_dir"
+            unzip -qq "$source_aar" "jni/$EXPECTED_ABI/*.so" -d "$verify_dir"
+
+            for library in "$verify_dir"/jni/"$EXPECTED_ABI"/*.so; do
+              while read -r alignment; do
+                if (( alignment < 0x4000 )); then
+                  echo "::error::$library has LOAD alignment $alignment; expected at least 0x4000."
+                  exit 1
+                fi
+              done < <(readelf -lW "$library" | awk '$1 == "LOAD" { print $NF }')
+            done
+            alignment_description="verified (16 KiB)"
+          fi
 
           mkdir -p release-dist
-          aar_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}.${VARIANT}.aar"
-          pom_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}.${VARIANT}.pom"
-          maven_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}.${VARIANT}-maven.tar.gz"
+          aar_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-${ASSET_SUFFIX}.aar"
+          pom_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-${ASSET_SUFFIX}.pom"
+          maven_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-${ASSET_SUFFIX}-maven.tar.gz"
 
           cp "$source_aar" "release-dist/$aar_asset"
           cp "$source_pom" "release-dist/$pom_asset"
@@ -204,17 +242,17 @@ jobs:
           {
             echo "Platform: Android"
             echo "Version: $ARTIFACT_VERSION"
-            echo "Variant: $VARIANT"
-            echo "ABIs: $abi_description"
+            echo "Build target: $TARGET"
+            echo "ABI: $EXPECTED_ABI"
             echo "Minimum API: 24"
-            echo "Prefab: $prefab_description"
+            echo "Prefab: disabled"
             echo "FFmpeg built-in formats and stream-copy features: preserved"
-            echo "Intended lite use: fast cut/concat/remux with -c copy"
-            echo "ARM64 16 KiB ELF alignment: verified"
-          } > "release-dist/BUILD-INFO-android.${VARIANT}.txt"
+            echo "Intended use: fast cut/concat/remux with -c copy"
+            echo "ARM64 ELF alignment: $alignment_description"
+          } > "release-dist/BUILD-INFO-${ASSET_SUFFIX}.txt"
 
-          if [[ "$VARIANT" == "lite" ]]; then
-            cat > release-dist/STREAM-COPY-GUIDE-android.lite.txt <<'EOF'
+          if [[ "$TARGET" == "arm64-v8a" ]]; then
+            cat > release-dist/STREAM-COPY-GUIDE-android.txt <<'EOF'
           Fast keyframe-aligned cut (place -ss before -i for fast input seeking):
             -ss 00:01:00 -i input.mp4 -t 00:00:30 -map 0 -c copy -avoid_negative_ts make_zero -movflags +faststart output.mp4
 
@@ -237,7 +275,7 @@ jobs:
       - name: Upload Android release assets
         uses: actions/upload-artifact@v7
         with:
-          name: release-android-${{ matrix.variant }}
+          name: release-${{ matrix.suffix }}
           path: release-dist/
           if-no-files-found: error
           retention-days: 14
@@ -246,7 +284,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: build-log-android-${{ matrix.variant }}
+          name: build-log-${{ matrix.suffix }}
           path: build.log
           if-no-files-found: ignore
           retention-days: 14
@@ -273,6 +311,11 @@ jobs:
 
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Restore and save Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          use-flakehub: false
 
       - name: Build Linux bundle
         shell: bash
@@ -331,6 +374,11 @@ jobs:
 
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Restore and save Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          use-flakehub: false
 
       - name: Build WebAssembly package
         shell: bash
@@ -417,6 +465,11 @@ jobs:
         uses: DeterminateSystems/determinate-nix-action@v3.21.8
         with:
           kvm: false
+
+      - name: Restore and save Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          use-flakehub: false
 
       - name: Build XCFrameworks and Swift package
         env:
@@ -558,6 +611,11 @@ jobs:
         with:
           kvm: false
 
+      - name: Restore and save Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          use-flakehub: false
+
       - name: Create umbrella XCFrameworks and Swift package
         shell: bash
         run: ./nix-apple.sh -p xcode26 --spm
@@ -634,32 +692,33 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Verify Android all and lite packages
+      - name: Verify Android ABI packages
         shell: bash
         run: |
           set -euo pipefail
 
-          all_aars=(dist/ffmpeg-kit-next-*.all.aar)
-          lite_aars=(dist/ffmpeg-kit-next-*.lite.aar)
+          expected_suffixes=(
+            android-armeabi-v7a
+            android-armeabi-v7a-neon
+            android-arm64-v8a
+            android-x86
+            android-x86_64
+          )
 
-          if (( ${#all_aars[@]} != 1 )) || [[ ! -f "${all_aars[0]}" ]]; then
-            echo "::error::Expected exactly one Android .all.aar release asset."
+          for suffix in "${expected_suffixes[@]}"; do
+            matches=(dist/ffmpeg-kit-next-*-"$suffix".aar)
+            if (( ${#matches[@]} != 1 )) || [[ ! -f "${matches[0]}" ]]; then
+              echo "::error::Expected exactly one Android $suffix AAR release asset."
+              exit 1
+            fi
+            echo "$suffix: $(stat -c %s "${matches[0]}") bytes"
+          done
+
+          android_aars=(dist/ffmpeg-kit-next-*-android-*.aar)
+          if (( ${#android_aars[@]} != ${#expected_suffixes[@]} )); then
+            echo "::error::Expected ${#expected_suffixes[@]} Android ABI AARs; found ${#android_aars[@]}."
             exit 1
           fi
-          if (( ${#lite_aars[@]} != 1 )) || [[ ! -f "${lite_aars[0]}" ]]; then
-            echo "::error::Expected exactly one Android .lite.aar release asset."
-            exit 1
-          fi
-
-          all_size="$(stat -c %s "${all_aars[0]}")"
-          lite_size="$(stat -c %s "${lite_aars[0]}")"
-          if (( lite_size >= all_size )); then
-            echo "::error::Android lite AAR ($lite_size bytes) is not smaller than all AAR ($all_size bytes)."
-            exit 1
-          fi
-
-          echo "Android all AAR:  $all_size bytes"
-          echo "Android lite AAR: $lite_size bytes"
 
       - name: Generate checksums
         shell: bash
@@ -692,5 +751,5 @@ jobs:
               --target "$GITHUB_SHA" \
               --title "FFmpegKitNext ${ARTIFACT_VERSION}" \
               --generate-notes \
-              --notes "Prebuilt LGPL artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Android includes an .all AAR with every supported ABI and Prefab, plus an ARM64-only .lite AAR that preserves FFmpeg's built-in format and stream-copy features. Apple includes platform-specific and universal Swift packages."
+              --notes "Prebuilt LGPL artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Android AARs are published separately for armeabi-v7a, armeabi-v7a-neon, arm64-v8a, x86, and x86_64; every package preserves FFmpeg's built-in format and stream-copy features. Apple includes platform-specific and universal Swift packages."
           fi
