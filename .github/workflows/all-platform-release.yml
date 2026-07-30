@@ -213,7 +213,6 @@ jobs:
             exit 1
           fi
 
-          alignment_description="not applicable"
           if [[ "$EXPECTED_ABI" == "arm64-v8a" ]]; then
             verify_dir="$RUNNER_TEMP/ffmpeg-kit-aar"
             mkdir -p "$verify_dir"
@@ -227,7 +226,6 @@ jobs:
                 fi
               done < <(readelf -lW "$library" | awk '$1 == "LOAD" { print $NF }')
             done
-            alignment_description="verified (16 KiB)"
           fi
 
           mkdir -p release-dist
@@ -238,18 +236,6 @@ jobs:
           cp "$source_aar" "release-dist/$aar_asset"
           cp "$source_pom" "release-dist/$pom_asset"
           tar -C "$maven_repository" -czf "release-dist/$maven_asset" .
-
-          {
-            echo "Platform: Android"
-            echo "Version: $ARTIFACT_VERSION"
-            echo "Build target: $TARGET"
-            echo "ABI: $EXPECTED_ABI"
-            echo "Minimum API: 24"
-            echo "Prefab: disabled"
-            echo "FFmpeg built-in formats and stream-copy features: preserved"
-            echo "Intended use: fast cut/concat/remux with -c copy"
-            echo "ARM64 ELF alignment: $alignment_description"
-          } > "release-dist/BUILD-INFO-${ASSET_SUFFIX}.txt"
 
           if [[ "$TARGET" == "arm64-v8a" ]]; then
             cat > release-dist/STREAM-COPY-GUIDE-android.txt <<'EOF'
@@ -336,13 +322,6 @@ jobs:
           asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-linux-${ARCH}.tar.gz"
           tar -C "$bundle_root" -czf "release-dist/$asset" ffmpeg-kit-next
 
-          {
-            echo "Platform: Linux"
-            echo "Version: $ARTIFACT_VERSION"
-            echo "Architecture: $ARCH"
-            echo "Runner architecture: $(uname -m)"
-          } > "release-dist/BUILD-INFO-linux-${ARCH}.txt"
-
       - name: Upload Linux release asset
         uses: actions/upload-artifact@v7
         with:
@@ -399,14 +378,6 @@ jobs:
           packed_name="$(npm pack "$package_root" --pack-destination release-dist)"
           asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-web-wasm32.tgz"
           mv "release-dist/$packed_name" "release-dist/$asset"
-
-          {
-            echo "Platform: Web"
-            echo "Version: $ARTIFACT_VERSION"
-            echo "Architecture: wasm32"
-            echo "Linkage: dynamic"
-            echo "Package format: npm"
-          } > release-dist/BUILD-INFO-web.txt
 
       - name: Upload Web release asset
         uses: actions/upload-artifact@v7
@@ -508,13 +479,6 @@ jobs:
           mkdir -p release-dist framework-staging
           asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-apple-${PLATFORM}.zip"
           ditto -c -k --sequesterRsrc --keepParent "$bundle" "release-dist/$asset"
-
-          {
-            echo "Platform: Apple $PLATFORM"
-            echo "Version: $ARTIFACT_VERSION"
-            echo "Format: XCFramework + local Swift package"
-            xcodebuild -version
-          } > "release-dist/BUILD-INFO-apple-${PLATFORM}.txt"
 
           framework_names=()
           while IFS= read -r directory; do
@@ -646,13 +610,6 @@ jobs:
           mkdir -p release-dist
           asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-apple-universal.zip"
           ditto -c -k --sequesterRsrc --keepParent "$bundle" "release-dist/$asset"
-
-          {
-            echo "Platforms: iOS, iPadOS, Mac Catalyst, macOS, tvOS, visionOS"
-            echo "Version: $ARTIFACT_VERSION"
-            echo "Format: umbrella XCFrameworks + local Swift package"
-            xcodebuild -version
-          } > release-dist/BUILD-INFO-apple-universal.txt
 
       - name: Upload universal Apple release asset
         uses: actions/upload-artifact@v7
