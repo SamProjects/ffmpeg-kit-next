@@ -824,7 +824,6 @@ jobs:
           else
             gh release create "$RELEASE_TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
               --title "FFmpegKitNext ${ARTIFACT_VERSION}" \
               --generate-notes \
               --notes "Prebuilt artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Every Android artifact name explicitly ends in lgpl3 or gpl3 to prevent license confusion. The LGPLv3 builds include all-ABI and separate-ABI AARs, are intended for compliant integration into closed-source apps, and contain no GPL or nonfree configuration. The all-ABI GPLv3 build additionally includes x264 and x265 and is not a proprietary commercial license. Every Android package includes shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame. Apple, Linux, and Web artifacts remain LGPLv3."
