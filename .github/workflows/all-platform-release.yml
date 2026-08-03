@@ -258,9 +258,24 @@ jobs:
           verify_dir="$RUNNER_TEMP/ffmpeg-kit-aar-$TARGET"
           mkdir -p "$verify_dir"
           verification_abi="$(head -n 1 <<< "$packaged_abis")"
+          libavutil_entry=""
+          while IFS= read -r entry; do
+            case "$entry" in
+              "jni/$verification_abi/libavutil.so"|"jni/$verification_abi/libavutil_neon.so")
+                libavutil_entry="$entry"
+                break
+                ;;
+            esac
+          done <<< "$archive_entries"
+
+          if [[ -z "$libavutil_entry" ]]; then
+            echo "::error::Android $TARGET AAR has no libavutil library for $verification_abi."
+            exit 1
+          fi
+
           libavutil="$verify_dir/libavutil.so"
           metadata="$verify_dir/libavutil.strings"
-          unzip -p "$source_aar" "jni/$verification_abi/libavutil.so" > "$libavutil"
+          unzip -p "$source_aar" "$libavutil_entry" > "$libavutil"
           strings "$libavutil" > "$metadata"
 
           require_flag() {
@@ -273,6 +288,13 @@ jobs:
           reject_flag() {
             if grep -Fq -- "$1" "$metadata"; then
               echo "::error::Android $TARGET unexpectedly contains FFmpeg configuration flag $1."
+              exit 1
+            fi
+          }
+
+          require_exact_metadata() {
+            if ! grep -Fxq -- "$1" "$metadata"; then
+              echo "::error::Android $TARGET is missing expected metadata: $1"
               exit 1
             fi
           }
@@ -291,7 +313,7 @@ jobs:
             lgpl3)
               grep -Fq "GNU LESSER GENERAL PUBLIC LICENSE" <<< "$license_header"
               grep -Fq "Version 3" <<< "$license_header"
-              grep -Fxq "LGPL version 3 or later" "$metadata"
+              require_exact_metadata "libavutil license: LGPL version 3 or later"
               reject_flag --enable-gpl
               reject_flag --enable-libx264
               reject_flag --enable-libx265
@@ -299,7 +321,7 @@ jobs:
             gpl3)
               grep -Eq '^[[:space:]]*GNU GENERAL PUBLIC LICENSE[[:space:]]*$' <<< "$license_header"
               grep -Fq "Version 3" <<< "$license_header"
-              grep -Fxq "GPL version 3 or later" "$metadata"
+              require_exact_metadata "libavutil license: GPL version 3 or later"
               require_flag --enable-gpl
               require_flag --enable-libx264
               require_flag --enable-libx265
