@@ -78,6 +78,7 @@ jobs:
           fi
 
           if [[ "$release_tag" != "v${artifact_version}" &&
+                "$release_tag" != "v${artifact_version}."* &&
                 "$release_tag" != "v${artifact_version}-"* &&
                 "$release_tag" != "v${artifact_version}_"* ]]; then
             echo "::error::Release tag ${release_tag} does not match source version ${artifact_version}."
