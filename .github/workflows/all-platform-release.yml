@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, for example v8.1.1 or v8.1.1_2"
+        description: "Release tag, for example v8.1.1 or v8.1.1.11"
         required: true
         type: string
 
@@ -81,7 +81,7 @@ jobs:
                 "$release_tag" != "v${artifact_version}-"* &&
                 "$release_tag" != "v${artifact_version}_"* ]]; then
             echo "::error::Release tag ${release_tag} does not match source version ${artifact_version}."
-            echo "::error::Use v${artifact_version} or a suffix such as v${artifact_version}_2."
+            echo "::error::Use v${artifact_version} or a numeric suffix such as v${artifact_version}.11."
             exit 1
           fi
 
@@ -390,6 +390,47 @@ jobs:
           name: build-log-${{ matrix.suffix }}
           path: build.log
           if-no-files-found: ignore
+          retention-days: 14
+
+  build_compliance:
+    name: Build compliance source bundle
+    needs:
+      - prepare
+      - build_android
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Check out exact release source and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download Android all-ABI artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-android-all-*
+          path: android-dist
+          merge-multiple: true
+
+      - name: Create corresponding source and compliance assets
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
+          ANDROID_DIST: android-dist
+          OUTPUT_DIR: release-dist
+          PREVIOUS_TAG: v8.1.1_10
+        shell: bash
+        run: bash scripts/ci/create-compliance-assets.sh
+
+      - name: Upload compliance release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-compliance
+          path: release-dist/
+          if-no-files-found: error
           retention-days: 14
 
   build_linux:
@@ -750,6 +791,7 @@ jobs:
     needs:
       - prepare
       - build_android
+      - build_compliance
       - build_linux
       - build_web
       - build_apple
@@ -808,6 +850,37 @@ jobs:
               xargs -0 sha256sum > SHA256SUMS
           )
 
+      - name: Verify compliance assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_assets=(
+            BUILD_INFO.txt
+            THIRD_PARTY_NOTICES.md
+            COPYING.LGPLv3
+            SOURCE_OFFER.md
+            "ffmpeg-kit-next-source-${{ needs.prepare.outputs.release_tag }}.tar.gz"
+            "third-party-sources-${{ needs.prepare.outputs.release_tag }}.tar.gz"
+          )
+          for asset in "${required_assets[@]}"; do
+            test -s "dist/$asset" || {
+              echo "::error::Missing compliance release asset: $asset"
+              exit 1
+            }
+          done
+
+          fork_listing="$RUNNER_TEMP/fork-source-listing.txt"
+          third_party_listing="$RUNNER_TEMP/third-party-source-listing.txt"
+          tar -tzf "dist/ffmpeg-kit-next-source-${{ needs.prepare.outputs.release_tag }}.tar.gz" \
+            > "$fork_listing"
+          tar -tzf "dist/third-party-sources-${{ needs.prepare.outputs.release_tag }}.tar.gz" \
+            > "$third_party_listing"
+          grep -Fq '/changes.diff' "$fork_listing"
+          for source_dir in ffmpeg gnu-config lame libvpx libiconv cpu_features x264 x265; do
+            grep -Fq "/$source_dir/" "$third_party_listing"
+          done
+
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -826,5 +899,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "FFmpegKitNext ${ARTIFACT_VERSION}" \
               --generate-notes \
-              --notes "Prebuilt artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Every Android artifact name explicitly ends in lgpl3 or gpl3 to prevent license confusion. The LGPLv3 builds include all-ABI and separate-ABI AARs, are intended for compliant integration into closed-source apps, and contain no GPL or nonfree configuration. The all-ABI GPLv3 build additionally includes x264 and x265 and is not a proprietary commercial license. Every Android package includes shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame. Apple, Linux, and Web artifacts remain LGPLv3."
+              --notes "Prebuilt artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Every Android artifact name explicitly ends in lgpl3 or gpl3 to prevent license confusion. The LGPLv3 builds include all-ABI and separate-ABI AARs, are intended for compliant integration into closed-source apps, and contain no GPL or nonfree configuration. The all-ABI GPLv3 build additionally includes x264 and x265 and is not a proprietary commercial license. Every Android package includes shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame. Apple, Linux, and Web artifacts remain LGPLv3. Corresponding source archives, BUILD_INFO.txt, third-party notices, LGPLv3 text, source availability information, and SHA-256 checksums are attached to this Release."
           fi
