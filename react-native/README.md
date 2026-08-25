@@ -19,7 +19,7 @@
     `vid.stab`, `x264`, `x265`, `xvidcore`
 
   - `zlib` and `MediaCodec` Android system libraries
-  - `bzip2`, `iconv`, `libuuid`, `zlib` system libraries and `AudioToolbox`, `VideoToolbox`, `AVFoundation` system frameworks on iOS/iPadOS
+  - `bzip2`, `libiconv`, `libuuid`, `zlib` system libraries and `AudioToolbox`, `VideoToolbox`, `AVFoundation` system frameworks on iOS/iPadOS
 
 - Includes Typescript definitions
 - Licensed under `LGPL 3.0` by default, `GPL v3.0` if GPL licensed libraries are enabled
@@ -74,7 +74,7 @@ any app. iOS and iPadOS need no extra repository step.
 enabled in the native build. For example, `mp3` encoding needs `lame` or `shine`, `h264` needs `x264`, and `vp8`/`vp9`
 needs `libvpx`.
 
-Those libraries are selected when you build `FFmpegKitNext` locally with the Nix-based build scripts. There are no
+Those libraries are selected when you build `FFmpegKitNext` locally with the Nix wrapper build scripts. There are no
 separate npm packages such as `min`, `https`, `audio`, `video`, `full`, or `full-gpl` to install.
 
 #### 2.2 Platform Support

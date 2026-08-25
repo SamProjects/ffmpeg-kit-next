@@ -33,7 +33,7 @@ get_library_source() {
     ;;
   ffmpeg)
     SOURCE_REPO_URL="https://github.com/arthenica/FFmpeg"
-    SOURCE_ID="n8.1.2"
+    SOURCE_ID="n9.0.1"
     SOURCE_TYPE="TAG"
     ;;
   fontconfig)
@@ -289,6 +289,11 @@ get_library_source() {
   zimg)
     SOURCE_REPO_URL="https://github.com/arthenica/zimg"
     SOURCE_ID="release-3.0.6"
+    SOURCE_TYPE="TAG"
+    ;;
+  zlib)
+    SOURCE_REPO_URL="https://github.com/arthenica/zlib"
+    SOURCE_ID="v1.3.2"
     SOURCE_TYPE="TAG"
     ;;
   esac

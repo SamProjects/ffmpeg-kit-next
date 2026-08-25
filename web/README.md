@@ -14,8 +14,10 @@
 
 ### 2 Building
 
-Web builds are Nix-based. You must install [Nix](https://nixos.org/) first to build the binaries. Then run the
+Web builds use the [Nix package manager](https://github.com/arthenica/ffmpeg-kit-next/wiki/Nix). You must install it on a supported host first to build the binaries. Then run the
 `nix-web.sh` wrapper from the project root.
+
+Install Nix on a supported host to build the project. Note that NixOS itself is not supported as a Web build host.
 
 Note that, `FFmpegKitNext` does not publish binaries and building it yourself is the only way to use it.
 
@@ -41,7 +43,7 @@ provides Emscripten (emsdk), CMake and the build tools.
 
 Web builds require the following tools.
 
-- **Nix** — the `web-wasm32-emscripten` profile supplies the Emscripten and CMake.
+- **Nix package manager** — the `web-wasm32-emscripten` profile supplies the Emscripten and CMake.
 
 #### 2.2 Build Variants and External Libraries
 
@@ -49,11 +51,11 @@ Web builds require the following tools.
 enabled in the native build. For example, `mp3` encoding needs `lame` or `shine`, `h264` needs `x264`, and
 `vp8`/`vp9` needs `libvpx`.
 
-Use the `--enable-<library name>` flag to support additional external or system libraries. Use `--enable-gpl` to
+Use the `--enable-lib-<library name>` flag to support additional external or system libraries. Use `--enable-gpl` to
 allow GPL-licensed libraries.
 
 ```sh
-./nix-web.sh -p web-wasm32-emscripten --enable-fontconfig --enable-freetype
+./nix-web.sh -p web-wasm32-emscripten --enable-lib-fontconfig --enable-lib-freetype
 ```
 
 Run `--help` to see all available build options.

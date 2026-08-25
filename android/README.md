@@ -1,6 +1,6 @@
 # FFmpegKitNext for Android
 
-`FFmpegKitNext` for Android can be built via [Nix](https://nixos.org/) and integrated locally.
+`FFmpegKitNext` for Android can be built locally with the recommended [Nix package manager](https://github.com/arthenica/ffmpeg-kit-next/wiki/Nix) workflow, or without Nix by installing the required Android toolchain yourself.
 
 ### 1. Features
 - Supports `API Level 24+`
@@ -12,8 +12,11 @@
 
 ### 2. Building
 
-Android builds are Nix-based. You must install [Nix](https://nixos.org/) first to build the binaries. Then run the
-`nix-android.sh` wrapper from the project root.
+Android builds can be run in two ways: with the [Nix package manager](https://github.com/arthenica/ffmpeg-kit-next/wiki/Nix), which is the default and recommended workflow, or without Nix by installing the required Android toolchain yourself.
+
+The examples below use the recommended Nix workflow. Install Nix on a supported host first, then run the `nix-android.sh` wrapper from the project root. Note that NixOS itself is not supported as an Android build host.
+
+Building without Nix is also supported. The non-Nix workflow is documented in the [Building](https://github.com/arthenica/ffmpeg-kit-next/wiki/Building) wiki page.
 
 Note that, `FFmpegKitNext` does not publish binaries and building it yourself is the only way to use it.
 
@@ -37,18 +40,19 @@ the Android SDK, NDK (r27d), CMake and the build tools.
 
 #### 2.1 Prerequisites
 
-Android builds require the following tools.
+Android build prerequisites depend on the workflow you choose.
 
-- **Nix** — the `android-r27d` profile supplies the Android SDK, NDK r27d and CMake.
+- **Nix workflow, recommended** — install the Nix package manager on a supported host. The `android-r27d` profile supplies the Android SDK, NDK r27d, CMake and required build tools.
+- **Non-Nix workflow** — install the required Android toolchain yourself, including the Android SDK, NDK r27d, CMake and platform build tools. See the [Building](https://github.com/arthenica/ffmpeg-kit-next/wiki/Building) wiki page for the non-Nix setup.
 
 #### 2.2 Options
 
-Use `--enable-<library name>` flag to support additional external or system libraries and
-`--disable-<architecture name>` to disable architectures you don't want to build. Use `--enable-gpl` to allow
+Use `--enable-lib-<library name>` flag to support additional external or system libraries and
+`--disable-arch-<architecture name>` to disable architectures you don't want to build. Use `--enable-gpl` to allow
 GPL-licensed libraries. Use `--prefab` to add a Prefab payload to the generated AAR for native/CMake consumers.
 
 ```
-./nix-android.sh -p android-r27d --enable-fontconfig --disable-arm-v7a-neon
+./nix-android.sh -p android-r27d --enable-lib-fontconfig --disable-arch-arm-v7a-neon
 ```
 
 Run `--help` to see all available build options.
@@ -65,9 +69,9 @@ For example, a default `API Level 24` build produces:
 
 ```
 prebuilt/bundle-android-aar-24-maven/
-└── com/arthenica/ffmpeg-kit-next/8.1.1/
-    ├── ffmpeg-kit-next-8.1.1.aar
-    └── ffmpeg-kit-next-8.1.1.pom
+└── com/arthenica/ffmpeg-kit-next/9.0.0/
+    ├── ffmpeg-kit-next-9.0.0.aar
+    └── ffmpeg-kit-next-9.0.0.pom
 ```
 
 ### 3. Using
@@ -85,7 +89,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.arthenica:ffmpeg-kit-next:8.1.1'
+    implementation 'com.arthenica:ffmpeg-kit-next:9.0.0'
 }
 ```
 
