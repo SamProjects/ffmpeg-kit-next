@@ -4,18 +4,12 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Release tag, for example v8.1.1 or v8.1.1.11"
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: all-platform-release-${{ github.ref }}-${{ inputs.release_tag }}
+  group: all-platform-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -34,8 +28,6 @@ jobs:
 
       - name: Resolve and verify release information
         id: release_context
-        env:
-          MANUAL_RELEASE_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -66,11 +58,7 @@ jobs:
             fi
           done
 
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            release_tag="$GITHUB_REF_NAME"
-          else
-            release_tag="$MANUAL_RELEASE_TAG"
-          fi
+          release_tag="$GITHUB_REF_NAME"
 
           if [[ ! "$release_tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
             echo "::error::Release tag must start with v and contain only letters, numbers, dot, underscore, or dash."
@@ -422,7 +410,6 @@ jobs:
           ARTIFACT_VERSION: ${{ needs.prepare.outputs.artifact_version }}
           ANDROID_DIST: android-dist
           OUTPUT_DIR: release-dist
-          PREVIOUS_TAG: v8.1.1_10
         shell: bash
         run: bash scripts/ci/create-compliance-assets.sh
 
@@ -877,7 +864,6 @@ jobs:
             > "$fork_listing"
           tar -tzf "dist/third-party-sources-${{ needs.prepare.outputs.release_tag }}.tar.gz" \
             > "$third_party_listing"
-          grep -Fq '/changes.diff' "$fork_listing"
           for source_dir in ffmpeg gnu-config lame libvpx libiconv cpu_features x264 x265; do
             grep -Fq "/$source_dir/" "$third_party_listing"
           done

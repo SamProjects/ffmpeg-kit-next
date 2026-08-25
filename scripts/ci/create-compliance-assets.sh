@@ -7,7 +7,6 @@ set -euo pipefail
 : "${ANDROID_DIST:?ANDROID_DIST is required}"
 : "${OUTPUT_DIR:?OUTPUT_DIR is required}"
 
-PREVIOUS_TAG="${PREVIOUS_TAG:-v8.1.1_10}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -20,10 +19,6 @@ CHECKOUT_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ffmpeg-kit-dependency-checkouts"
 mkdir -p "$FORK_DIR" "$THIRD_PARTY_DIR" "$CHECKOUT_DIR" "$OUTPUT_DIR"
 
 git -C "$REPOSITORY_ROOT" archive HEAD | tar -xf - -C "$FORK_DIR"
-git -C "$REPOSITORY_ROOT" diff --binary "$PREVIOUS_TAG"..HEAD \
-  > "$FORK_DIR/changes.diff"
-git -C "$REPOSITORY_ROOT" log --reverse --format='%H %s' \
-  "$PREVIOUS_TAG"..HEAD > "$FORK_DIR/CHANGES-SINCE-$PREVIOUS_TAG.txt"
 
 cp "$REPOSITORY_ROOT/compliance/COMPLIANCE-REBUILD.md" \
   "$FORK_DIR/COMPLIANCE-REBUILD.md"
@@ -78,22 +73,33 @@ archive_dependency() {
     "$name" "$revision" "$resolved_commit" "$repository" >> "$manifest"
 }
 
-archive_dependency ffmpeg \
-  https://github.com/arthenica/FFmpeg n8.1.2
-archive_dependency gnu-config \
-  https://github.com/arthenica/gnu-config v20210814
-archive_dependency lame \
-  https://github.com/arthenica/lame RELEASE__3_100
-archive_dependency libvpx \
-  https://github.com/arthenica/libvpx v1.16.0
-archive_dependency libiconv \
-  https://github.com/arthenica/libiconv v1.17
-archive_dependency cpu_features \
-  https://github.com/arthenica/cpu_features v0.11.0
-archive_dependency x264 \
-  https://github.com/arthenica/x264 b35605ace3ddf7c1a5d67a2eb553f034aef41d55
-archive_dependency x265 \
-  https://github.com/arthenica/x265 4.2
+source "$REPOSITORY_ROOT/scripts/source.sh"
+
+archive_project_dependency() {
+  local archive_name="$1"
+  local project_name="$2"
+  local repository
+  local revision
+
+  set +u
+  repository="$(get_library_source "$project_name" 1)"
+  revision="$(get_library_source "$project_name" 2)"
+  set -u
+  if [[ -z "$repository" || -z "$revision" ]]; then
+    echo "Unable to resolve source for $project_name from scripts/source.sh." >&2
+    return 1
+  fi
+  archive_dependency "$archive_name" "$repository" "$revision"
+}
+
+archive_project_dependency ffmpeg ffmpeg
+archive_project_dependency gnu-config config
+archive_project_dependency lame lame
+archive_project_dependency libvpx libvpx
+archive_project_dependency libiconv libiconv
+archive_project_dependency cpu_features cpu-features
+archive_project_dependency x264 x264
+archive_project_dependency x265 x265
 
 cp "$REPOSITORY_ROOT/compliance/THIRD_PARTY_NOTICES.md" \
   "$THIRD_PARTY_DIR/THIRD_PARTY_NOTICES.md"
@@ -113,7 +119,6 @@ FFmpegKitNext Android Build Information
 Release tag: $RELEASE_TAG
 Artifact version: $ARTIFACT_VERSION
 Fork source commit: $SOURCE_COMMIT
-Previous release comparison base: $PREVIOUS_TAG
 Runner OS: ubuntu-24.04
 Nix Android package: android-r27d
 Android minimum API: 24
