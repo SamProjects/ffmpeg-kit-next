@@ -98,8 +98,6 @@ archive_project_dependency lame lame
 archive_project_dependency libvpx libvpx
 archive_project_dependency libiconv libiconv
 archive_project_dependency cpu_features cpu-features
-archive_project_dependency x264 x264
-archive_project_dependency x265 x265
 
 cp "$REPOSITORY_ROOT/compliance/THIRD_PARTY_NOTICES.md" \
   "$THIRD_PARTY_DIR/THIRD_PARTY_NOTICES.md"
@@ -127,23 +125,20 @@ Native linkage: shared FFmpeg libraries
 LGPLv3 all-ABI build command:
   ./nix-android.sh -p android-r27d --debug --enable-libvpx --enable-lame --enable-android-media-codec
 
-GPLv3 all-ABI build command:
-  ./nix-android.sh -p android-r27d --enable-libvpx --enable-lame --enable-android-media-codec --enable-gpl --enable-x264 --enable-x265
-
 Corresponding dependency revisions:
 EOF
 sed 's/^/  /' "$manifest" >> "$build_info"
 
-for license_family in lgpl3 gpl3; do
-  aar="$ANDROID_DIST/ffmpeg-kit-next-$ARTIFACT_VERSION-android-all-$license_family.aar"
-  test -f "$aar"
-  archive_entries="$(unzip -Z1 "$aar")"
-  abi_entry="$(grep -Em1 '^jni/arm64-v8a/libavutil(_neon)?\.so$' <<< "$archive_entries")"
-  test -n "$abi_entry"
-  binary="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/libavutil-$license_family.so"
-  metadata="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/libavutil-$license_family.strings"
-  unzip -p "$aar" "$abi_entry" > "$binary"
-  "$PYTHON_BIN" - "$binary" > "$metadata" <<'PY'
+license_family=lgpl3
+aar="$ANDROID_DIST/ffmpeg-kit-next-$ARTIFACT_VERSION-android-all-$license_family.aar"
+test -f "$aar"
+archive_entries="$(unzip -Z1 "$aar")"
+abi_entry="$(grep -Em1 '^jni/arm64-v8a/libavutil(_neon)?\.so$' <<< "$archive_entries")"
+test -n "$abi_entry"
+binary="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/libavutil-$license_family.so"
+metadata="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/libavutil-$license_family.strings"
+unzip -p "$aar" "$abi_entry" > "$binary"
+"$PYTHON_BIN" - "$binary" > "$metadata" <<'PY'
 import re
 import sys
 
@@ -153,12 +148,12 @@ with open(sys.argv[1], "rb") as binary_file:
 for value in re.findall(rb"[\x20-\x7e]{4,}", binary_data):
     print(value.decode("ascii"))
 PY
-  configure_line="$(grep -Fm1 -- '--enable-shared' "$metadata")"
-  license_line="$(grep -Fm1 'libavutil license:' "$metadata")"
-  test -n "$configure_line"
-  test -n "$license_line"
+configure_line="$(grep -Fm1 -- '--enable-shared' "$metadata")"
+license_line="$(grep -Fm1 'libavutil license:' "$metadata")"
+test -n "$configure_line"
+test -n "$license_line"
 
-  cat >> "$build_info" <<EOF
+cat >> "$build_info" <<EOF
 
 $license_family AAR: $(basename "$aar")
 SHA-256: $(sha256sum "$aar" | awk '{print $1}')
@@ -166,4 +161,3 @@ $license_line
 FFmpeg configuration:
 $configure_line
 EOF
-done

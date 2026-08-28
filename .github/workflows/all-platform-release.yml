@@ -1,4 +1,4 @@
-name: Build All Platforms and Release
+name: Build Android LGPL3 and Release
 
 on:
   push:
@@ -36,27 +36,11 @@ jobs:
             sed -n 's/^#define FFMPEG_KIT_VERSION "\([^"]*\)"/\1/p' \
               android/ffmpeg-kit-next-android-lib/src/main/cpp/ffmpegkit.h
           )"
-          apple_version="$(
-            sed -n 's/.*const FFmpegKitVersion.*@"\([^"]*\)".*/\1/p' \
-              apple/src/FFmpegKitConfig.m
-          )"
-          linux_version="$(
-            sed -n 's/.*FFmpegKitVersion = "\([^"]*\)".*/\1/p' \
-              linux/src/FFmpegKitConfig.h
-          )"
-          web_version="$(
-            sed -n 's/.*FFmpegKitVersion = "\([^"]*\)".*/\1/p' \
-              web/src/FFmpegKitConfig.h
-          )"
-
           artifact_version="$android_version"
-          for platform_version in "$apple_version" "$linux_version" "$web_version"; do
-            if [[ -z "$artifact_version" || "$platform_version" != "$artifact_version" ]]; then
-              echo "::error::Platform source versions do not match."
-              echo "::error::Android=$android_version Apple=$apple_version Linux=$linux_version Web=$web_version"
-              exit 1
-            fi
-          done
+          if [[ -z "$artifact_version" ]]; then
+            echo "::error::Unable to resolve the Android source version."
+            exit 1
+          fi
 
           release_tag="$GITHUB_REF_NAME"
 
@@ -89,31 +73,6 @@ jobs:
           - target: all
             suffix: android-all-lgpl3
             archive_abis: arm64-v8a armeabi-v7a x86 x86_64
-            license_family: lgpl3
-          - target: all-gpl3
-            suffix: android-all-gpl3
-            archive_abis: arm64-v8a armeabi-v7a x86 x86_64
-            license_family: gpl3
-          - target: arm-v7a
-            suffix: android-armeabi-v7a-lgpl3
-            archive_abis: armeabi-v7a
-            license_family: lgpl3
-          - target: arm-v7a-neon
-            suffix: android-armeabi-v7a-neon-lgpl3
-            archive_abis: armeabi-v7a
-            license_family: lgpl3
-          - target: arm64-v8a
-            suffix: android-arm64-v8a-lgpl3
-            archive_abis: arm64-v8a
-            license_family: lgpl3
-          - target: x86
-            suffix: android-x86-lgpl3
-            archive_abis: x86
-            license_family: lgpl3
-          - target: x86-64
-            suffix: android-x86_64-lgpl3
-            archive_abis: x86_64
-            license_family: lgpl3
 
     steps:
       - name: Check out source and tags
@@ -136,9 +95,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Publish both an all-ABI package for app bundles and the existing
-          # single-ABI packages. FFmpeg's built-in formats and stream-copy
-          # features remain enabled in every package. libvpx and LAME add
+          # Publish one LGPLv3 all-ABI package for Android app bundles.
+          # FFmpeg's built-in formats and stream-copy features remain enabled.
+          # libvpx and LAME add
           # VP8/VP9 and MP3 encoding while keeping the build under LGPL. The
           # wrapper's Android MediaCodec option maps to FFmpeg's
           # --enable-mediacodec configure flag for hardware codecs.
@@ -148,64 +107,9 @@ jobs:
             --enable-android-media-codec
           )
 
-          case "$TARGET" in
-            all)
-              ./nix-android.sh -p android-r27d \
-                --debug \
-                "${codec_options[@]}"
-              ;;
-            all-gpl3)
-              ./nix-android.sh -p android-r27d \
-                "${codec_options[@]}" \
-                --enable-gpl \
-                --enable-x264 \
-                --enable-x265
-              ;;
-            arm-v7a)
-              ./nix-android.sh -p android-r27d \
-                "${codec_options[@]}" \
-                --disable-arm-v7a-neon \
-                --disable-arm64-v8a \
-                --disable-x86 \
-                --disable-x86-64
-              ;;
-            arm-v7a-neon)
-              ./nix-android.sh -p android-r27d \
-                "${codec_options[@]}" \
-                --disable-arm-v7a \
-                --disable-arm64-v8a \
-                --disable-x86 \
-                --disable-x86-64
-              ;;
-            arm64-v8a)
-              ./nix-android.sh -p android-r27d \
-                "${codec_options[@]}" \
-                --disable-arm-v7a \
-                --disable-arm-v7a-neon \
-                --disable-x86 \
-                --disable-x86-64
-              ;;
-            x86)
-              ./nix-android.sh -p android-r27d \
-                "${codec_options[@]}" \
-                --disable-arm-v7a \
-                --disable-arm-v7a-neon \
-                --disable-arm64-v8a \
-                --disable-x86-64
-              ;;
-            x86-64)
-              ./nix-android.sh -p android-r27d \
-                "${codec_options[@]}" \
-                --disable-arm-v7a \
-                --disable-arm-v7a-neon \
-                --disable-arm64-v8a \
-                --disable-x86
-              ;;
-            *)
-              echo "::error::Unknown Android target: $TARGET"
-              exit 1
-              ;;
-          esac
+          ./nix-android.sh -p android-r27d \
+            --debug \
+            "${codec_options[@]}"
 
       - name: Verify and package Android assets
         env:
@@ -213,7 +117,6 @@ jobs:
           TARGET: ${{ matrix.target }}
           ASSET_SUFFIX: ${{ matrix.suffix }}
           EXPECTED_ABIS: ${{ matrix.archive_abis }}
-          LICENSE_FAMILY: ${{ matrix.license_family }}
         shell: bash
         run: |
           set -euo pipefail
@@ -340,28 +243,12 @@ jobs:
           license_file="$verify_dir/license.txt"
           unzip -p "$source_aar" res/raw/license.txt > "$license_file"
           license_header="$(sed -n '1,4p' "$license_file")"
-          case "$LICENSE_FAMILY" in
-            lgpl3)
-              grep -Fq "GNU LESSER GENERAL PUBLIC LICENSE" <<< "$license_header"
-              grep -Fq "Version 3" <<< "$license_header"
-              require_exact_metadata "libavutil license: LGPL version 3 or later"
-              reject_flag --enable-gpl
-              reject_flag --enable-libx264
-              reject_flag --enable-libx265
-              ;;
-            gpl3)
-              grep -Eq '^[[:space:]]*GNU GENERAL PUBLIC LICENSE[[:space:]]*$' <<< "$license_header"
-              grep -Fq "Version 3" <<< "$license_header"
-              require_exact_metadata "libavutil license: GPL version 3 or later"
-              require_flag --enable-gpl
-              require_flag --enable-libx264
-              require_flag --enable-libx265
-              ;;
-            *)
-              echo "::error::Unknown Android license family: $LICENSE_FAMILY"
-              exit 1
-              ;;
-          esac
+          grep -Fq "GNU LESSER GENERAL PUBLIC LICENSE" <<< "$license_header"
+          grep -Fq "Version 3" <<< "$license_header"
+          require_exact_metadata "libavutil license: LGPL version 3 or later"
+          reject_flag --enable-gpl
+          reject_flag --enable-libx264
+          reject_flag --enable-libx265
 
           if grep -Fxq "arm64-v8a" <<< "$packaged_abis"; then
             unzip -qq "$source_aar" "jni/arm64-v8a/*.so" -d "$verify_dir"
@@ -465,6 +352,7 @@ jobs:
 
   build_linux:
     name: Linux (${{ matrix.arch }})
+    if: ${{ false }}
     needs: prepare
     timeout-minutes: 360
     strategy:
@@ -529,6 +417,7 @@ jobs:
 
   build_web:
     name: WebAssembly
+    if: ${{ false }}
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -586,6 +475,7 @@ jobs:
 
   build_apple:
     name: Apple (${{ matrix.platform }})
+    if: ${{ false }}
     needs: prepare
     # Determinate Nix no longer supports Intel macOS hosts. Apple Silicon
     # still cross-compiles the x86_64 slices included in the XCFrameworks.
@@ -711,6 +601,7 @@ jobs:
 
   build_apple_umbrella:
     name: Apple universal Swift package
+    if: ${{ false }}
     needs:
       - prepare
       - build_apple
@@ -822,10 +713,6 @@ jobs:
       - prepare
       - build_android
       - build_compliance
-      - build_linux
-      - build_web
-      - build_apple
-      - build_apple_umbrella
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -845,12 +732,6 @@ jobs:
 
           expected_suffixes=(
             android-all-lgpl3
-            android-all-gpl3
-            android-armeabi-v7a-lgpl3
-            android-armeabi-v7a-neon-lgpl3
-            android-arm64-v8a-lgpl3
-            android-x86-lgpl3
-            android-x86_64-lgpl3
           )
 
           for suffix in "${expected_suffixes[@]}"; do
@@ -918,7 +799,7 @@ jobs:
             > "$fork_listing"
           tar -tzf "dist/third-party-sources-${{ needs.prepare.outputs.release_tag }}.tar.gz" \
             > "$third_party_listing"
-          for source_dir in ffmpeg gnu-config lame libvpx libiconv cpu_features x264 x265; do
+          for source_dir in ffmpeg gnu-config lame libvpx libiconv cpu_features; do
             grep -Fq "/$source_dir/" "$third_party_listing"
           done
 
@@ -940,5 +821,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "FFmpegKitNext ${ARTIFACT_VERSION}" \
               --generate-notes \
-              --notes "Prebuilt artifacts for Android, Linux x86_64/ARM64, WebAssembly, iOS/iPadOS, Mac Catalyst, macOS, tvOS, and visionOS. Every Android artifact name explicitly ends in lgpl3 or gpl3 to prevent license confusion. The LGPLv3 builds include all-ABI and separate-ABI AARs, are intended for compliant integration into closed-source apps, and contain no GPL or nonfree configuration. The all-ABI GPLv3 build additionally includes x264 and x265 and is not a proprietary commercial license. Every Android package includes shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame. Apple, Linux, and Web artifacts remain LGPLv3. Corresponding source archives, BUILD_INFO.txt, third-party notices, LGPLv3 text, source availability information, and SHA-256 checksums are attached to this Release."
+              --notes "Android all-ABI LGPLv3 release for app bundles and closed-source app integration subject to LGPL compliance. The AAR contains shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame, with no GPL or nonfree configuration. A matching Google Play native debug-symbols archive, corresponding source archives, BUILD_INFO.txt, third-party notices, LGPLv3 text, source availability information, and SHA-256 checksums are attached."
           fi
