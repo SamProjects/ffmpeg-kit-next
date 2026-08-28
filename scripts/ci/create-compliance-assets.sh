@@ -125,7 +125,7 @@ Android minimum API: 24
 Native linkage: shared FFmpeg libraries
 
 LGPLv3 all-ABI build command:
-  ./nix-android.sh -p android-r27d --enable-libvpx --enable-lame --enable-android-media-codec
+  ./nix-android.sh -p android-r27d --debug --enable-libvpx --enable-lame --enable-android-media-codec
 
 GPLv3 all-ABI build command:
   ./nix-android.sh -p android-r27d --enable-libvpx --enable-lame --enable-android-media-codec --enable-gpl --enable-x264 --enable-x265

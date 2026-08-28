@@ -151,6 +151,7 @@ jobs:
           case "$TARGET" in
             all)
               ./nix-android.sh -p android-r27d \
+                --debug \
                 "${codec_options[@]}"
               ;;
             all-gpl3)
@@ -223,8 +224,49 @@ jobs:
 
           test -f "$source_aar"
           test -f "$source_pom"
-
           archive_entries="$(unzip -Z1 "$source_aar")"
+
+          if [[ "$TARGET" == "all" ]]; then
+            symbols_dir="$RUNNER_TEMP/native-debug-symbols"
+            rm -rf "$symbols_dir"
+            mkdir -p "$symbols_dir" release-dist
+
+            objcopy="$(command -v objcopy)"
+            test -x "$objcopy"
+
+            for abi in $EXPECTED_ABIS; do
+              source_dir="android/obj/local/$abi"
+              test -d "$source_dir"
+              mkdir -p "$symbols_dir/$abi"
+
+              while IFS= read -r -d '' library; do
+                library_name="$(basename "$library")"
+                symbol_library="$symbols_dir/$abi/$library_name"
+                "$objcopy" --strip-debug "$library" "$symbol_library"
+
+                if ! readelf -SW "$symbol_library" | grep -Fq '.symtab'; then
+                  echo "::error::$abi/$library_name has no native symbol table."
+                  exit 1
+                fi
+                if ! grep -Fxq "jni/$abi/$library_name" <<< "$archive_entries"; then
+                  echo "::error::Symbol file $abi/$library_name has no matching library in the AAR."
+                  exit 1
+                fi
+              done < <(find "$source_dir" -maxdepth 1 -type f -name '*.so' -print0)
+
+              if ! find "$symbols_dir/$abi" -maxdepth 1 -type f -name '*.so' -print -quit | grep -q .; then
+                echo "::error::No native symbols found for Android ABI $abi."
+                exit 1
+              fi
+            done
+
+            symbols_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-all-lgpl3-native-debug-symbols.zip"
+            (
+              cd "$symbols_dir"
+              zip -qr "$GITHUB_WORKSPACE/release-dist/$symbols_asset" .
+            )
+          fi
+
           packaged_abis="$(
             printf '%s\n' "$archive_entries" |
               sed -n 's#^jni/\([^/]*\)/.*\.so$#\1#p' |
@@ -818,6 +860,18 @@ jobs:
               exit 1
             fi
             echo "$suffix: $(stat -c %s "${matches[0]}") bytes"
+          done
+
+          symbols_zip="dist/ffmpeg-kit-next-${{ needs.prepare.outputs.artifact_version }}-android-all-lgpl3-native-debug-symbols.zip"
+          test -s "$symbols_zip" || {
+            echo "::error::Missing Android all-ABI native debug symbols."
+            exit 1
+          }
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            unzip -Z1 "$symbols_zip" | grep -Eq "^${abi}/[^/]+\\.so$" || {
+              echo "::error::Native debug symbols are missing ABI $abi."
+              exit 1
+            }
           done
 
           android_aars=(dist/ffmpeg-kit-next-*-android-*.aar)
