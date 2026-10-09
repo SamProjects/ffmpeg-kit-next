@@ -1,0 +1,34 @@
+name: Android native symbol packaging
+
+on:
+  push:
+    paths:
+      - 'scripts/ci/package-android-debug-symbols.py'
+      - 'scripts/ci/tests/**'
+      - 'scripts/function-android.sh'
+      - 'scripts/android/libvpx.sh'
+      - 'android/ffmpeg-kit-next-android-lib/build.gradle'
+      - '.github/workflows/all-platform-release.yml'
+      - '.github/workflows/android-native-symbols.yml'
+  pull_request:
+    paths:
+      - 'scripts/ci/package-android-debug-symbols.py'
+      - 'scripts/ci/tests/**'
+      - 'scripts/function-android.sh'
+      - 'scripts/android/libvpx.sh'
+      - 'android/ffmpeg-kit-next-android-lib/build.gradle'
+      - '.github/workflows/all-platform-release.yml'
+      - '.github/workflows/android-native-symbols.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check Android shell scripts
+        run: bash -n scripts/function-android.sh scripts/android/libvpx.sh
+      - name: Test same-build FULL symbol packaging and rejection paths
+        run: python3 -m unittest discover -s scripts/ci/tests -v

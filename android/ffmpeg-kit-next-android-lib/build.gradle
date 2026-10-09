@@ -41,6 +41,14 @@ android {
         }
     }
 
+    // Consumers extract Play symbols when building their own release AAB.
+    // Preserve any symbols supplied by the native build in this library AAR.
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
+
     testOptions {
         unitTests.returnDefaultValues = true
         unitTests.includeAndroidResources = true

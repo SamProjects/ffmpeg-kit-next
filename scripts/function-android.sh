@@ -40,6 +40,12 @@ get_android_app_stl() {
 
 build_application_mk() {
   local APP_STL=$(get_android_app_stl)
+  local DEBUG_LINK_FLAGS=""
+  local DEBUG_STRIP_SETTING=""
+  if [[ -n ${FFMPEG_KIT_DEBUG} ]]; then
+    DEBUG_LINK_FLAGS="-Wl,--build-id=sha1"
+    DEBUG_STRIP_SETTING="APP_STRIP_MODE := none"
+  fi
 
   local BUILD_DATE="-DFFMPEG_KIT_BUILD_DATE=$(date +%Y%m%d 2>>"${BASEDIR}"/build.log)"
   if [[ -z ${NO_FFMPEG_KIT_PROTOCOLS} ]]; then
@@ -52,6 +58,7 @@ build_application_mk() {
 
   cat >"${BASEDIR}/android/jni/Application.mk" <<EOF
 APP_OPTIM := release
+${DEBUG_STRIP_SETTING}
 
 APP_ABI := ${ANDROID_ARCHITECTURES}
 
@@ -65,7 +72,7 @@ FFMPEG_KIT_PACKAGE_NAME_CFLAG := $(get_package_name_cflag)
 
 APP_CFLAGS := -O3 -DANDROID ${MIN_API} ${BUILD_DATE} -Wall -Wno-deprecated-declarations -Wno-pointer-sign -Wno-switch -Wno-unused-result -Wno-unused-variable ${USES_FFMPEG_KIT_PROTOCOLS} ${FFMPEG_KIT_DEBUG} ${EXTRA_CFLAGS}
 
-APP_LDFLAGS := -Wl,--hash-style=both ${EXTRA_LDFLAGS}
+APP_LDFLAGS := -Wl,--hash-style=both ${EXTRA_LDFLAGS} ${DEBUG_LINK_FLAGS}
 EOF
 }
 
@@ -476,14 +483,16 @@ get_arch_specific_ldflags() {
 
 get_ldflags() {
   local ARCH_FLAGS=$(get_arch_specific_ldflags)
+  local DEBUG_LINK_FLAGS=""
   if [[ -z ${FFMPEG_KIT_DEBUG} ]]; then
     local OPTIMIZATION_FLAGS="$(get_size_optimization_ldflags "$1")"
   else
     local OPTIMIZATION_FLAGS="${FFMPEG_KIT_DEBUG}"
+    DEBUG_LINK_FLAGS="-Wl,--build-id=sha1"
   fi
   local COMMON_LINKED_LIBS=$(get_common_linked_libraries "$1")
 
-  echo "${ARCH_FLAGS} ${OPTIMIZATION_FLAGS} ${COMMON_LINKED_LIBS} ${EXTRA_LDFLAGS} -Wl,--hash-style=both -Wl,--exclude-libs,libgcc.a -Wl,--exclude-libs,libunwind.a"
+  echo "${ARCH_FLAGS} ${OPTIMIZATION_FLAGS} ${COMMON_LINKED_LIBS} ${EXTRA_LDFLAGS} ${DEBUG_LINK_FLAGS} -Wl,--hash-style=both -Wl,--exclude-libs,libgcc.a -Wl,--exclude-libs,libunwind.a"
 }
 
 create_mason_cross_file() {
@@ -1128,6 +1137,10 @@ EOF
 }
 
 android_ndk_cmake() {
+  local CMAKE_DEBUG_OPTIONS=""
+  if [[ -n ${FFMPEG_KIT_DEBUG} ]]; then
+    CMAKE_DEBUG_OPTIONS="-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+  fi
   local cmake=$(find "${ANDROID_SDK_ROOT}"/cmake -path \*/bin/cmake -type f -print -quit)
   if [[ -z ${cmake} ]]; then
     cmake=$(which cmake)
@@ -1156,6 +1169,7 @@ android_ndk_cmake() {
     -H"${BASEDIR}"/src/"${LIB_NAME}" \
     -B"${BUILD_DIR}" \
     "${ASM_OPTIONS}" \
+    ${CMAKE_DEBUG_OPTIONS} \
     -DANDROID_PLATFORM=android-"${API}"
 }
 

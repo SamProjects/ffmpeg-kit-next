@@ -121,6 +121,8 @@ Runner OS: ubuntu-24.04
 Nix Android package: android-r27d
 Android minimum API: 24
 Native linkage: shared FFmpeg libraries
+Native symbols: FULL DWARF information and GNU Build IDs retained in the AAR
+Symbol ZIP: same-build unstripped libraries, without --strip-debug
 
 LGPLv3 all-ABI build command:
   ./nix-android.sh -p android-r27d --debug --enable-libvpx --enable-lame --enable-android-media-codec

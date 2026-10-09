@@ -42,6 +42,11 @@ make distclean 2>/dev/null 1>/dev/null
 
 # NOTE THAT RECONFIGURE IS NOT SUPPORTED
 
+DEBUG_OPTIONS="--disable-debug"
+if [[ -n ${FFMPEG_KIT_DEBUG} ]]; then
+  DEBUG_OPTIONS="--enable-debug"
+fi
+
 # UNDO WORKAROUNDS
 git checkout "${BASEDIR}"/src/"${LIB_NAME}"/build/make/configure.sh 1>>"${BASEDIR}"/build.log 2>&1
 
@@ -68,7 +73,7 @@ git checkout "${BASEDIR}"/src/"${LIB_NAME}"/build/make/configure.sh 1>>"${BASEDI
   --enable-static \
   --disable-realtime-only \
   --disable-shared \
-  --disable-debug \
+  ${DEBUG_OPTIONS} \
   --disable-gprof \
   --disable-gcov \
   --disable-ccache \

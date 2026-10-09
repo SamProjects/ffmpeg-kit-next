@@ -26,6 +26,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test FULL native symbol packaging before building
+        run: python3 -m unittest discover -s scripts/ci/tests -v
+
       - name: Resolve and verify release information
         id: release_context
         shell: bash
@@ -127,52 +130,14 @@ jobs:
 
           test -f "$source_aar"
           test -f "$source_pom"
+          mkdir -p release-dist
+          symbols_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-all-lgpl3-native-debug-symbols.zip"
+          python3 scripts/ci/package-android-debug-symbols.py \
+            --aar "$source_aar" \
+            --native-root android/obj/local \
+            --abis $EXPECTED_ABIS \
+            --symbols-zip "release-dist/$symbols_asset"
           archive_entries="$(unzip -Z1 "$source_aar")"
-
-          if [[ "$TARGET" == "all" ]]; then
-            symbols_dir="$RUNNER_TEMP/native-debug-symbols"
-            rm -rf "$symbols_dir"
-            mkdir -p "$symbols_dir" release-dist
-
-            objcopy="$(
-              nix develop .#android-r27d -c bash -c \
-                'tool="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"; test -x "$tool"; printf "%s\n" "$tool"' |
-                tail -n 1
-            )"
-            test -x "$objcopy"
-
-            for abi in $EXPECTED_ABIS; do
-              source_dir="android/obj/local/$abi"
-              test -d "$source_dir"
-              mkdir -p "$symbols_dir/$abi"
-
-              while IFS= read -r -d '' library; do
-                library_name="$(basename "$library")"
-                symbol_library="$symbols_dir/$abi/$library_name"
-                "$objcopy" --strip-debug "$library" "$symbol_library"
-
-                if ! readelf -SW "$symbol_library" | grep -Fq '.symtab'; then
-                  echo "::error::$abi/$library_name has no native symbol table."
-                  exit 1
-                fi
-                if ! grep -Fxq "jni/$abi/$library_name" <<< "$archive_entries"; then
-                  echo "::error::Symbol file $abi/$library_name has no matching library in the AAR."
-                  exit 1
-                fi
-              done < <(find "$source_dir" -maxdepth 1 -type f -name '*.so' -print0)
-
-              if ! find "$symbols_dir/$abi" -maxdepth 1 -type f -name '*.so' -print -quit | grep -q .; then
-                echo "::error::No native symbols found for Android ABI $abi."
-                exit 1
-              fi
-            done
-
-            symbols_asset="ffmpeg-kit-next-${ARTIFACT_VERSION}-android-all-lgpl3-native-debug-symbols.zip"
-            (
-              cd "$symbols_dir"
-              zip -qr "$GITHUB_WORKSPACE/release-dist/$symbols_asset" .
-            )
-          fi
 
           packaged_abis="$(
             printf '%s\n' "$archive_entries" |
@@ -825,5 +790,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "FFmpegKitNext ${ARTIFACT_VERSION}" \
               --generate-notes \
-              --notes "Android all-ABI LGPLv3 release for app bundles and closed-source app integration subject to LGPL compliance. The AAR contains shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame, with no GPL or nonfree configuration. A matching Google Play native debug-symbols archive, corresponding source archives, BUILD_INFO.txt, third-party notices, LGPLv3 text, source availability information, and SHA-256 checksums are attached."
+              --notes "Android all-ABI LGPLv3 release for app bundles and closed-source app integration subject to LGPL compliance. The AAR contains shared FFmpeg libraries, MediaCodec, libvpx, and libmp3lame, with no GPL or nonfree configuration. The AAR retains FULL native debug information and GNU Build IDs for every JNI library, so consuming apps can extract symbols into their AAB with ndk.debugSymbolLevel=FULL. A matching full native debug-symbols archive, corresponding source archives, BUILD_INFO.txt, third-party notices, LGPLv3 text, source availability information, and SHA-256 checksums are attached."
           fi
